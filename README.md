@@ -423,14 +423,17 @@ Consulta [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) per configurar l'entorn de d
 ## Roadmap
 
 - [x] Autenticació amb API keys ✅
+- [ ] **Sistema de tracking d'ús per projecte** (Alta prioritat)
+- [ ] **Suport per més documents**: Passaport, Permís de conduir, NIE
 - [ ] Comparació d'engines OCR (Tesseract vs Google Vision)
-- [ ] Suport per més documents (NIE, Passaport, Factures, Contractes)
-- [ ] Detecció automàtica del tipus de document
+- [ ] Dashboard d'estadístiques i mètriques amb costos
 - [ ] Cache de resultats per optimitzar costos
-- [ ] Dashboard d'estadístiques i mètriques
-- [ ] Rate limiting avançat
+- [ ] Detecció automàtica del tipus de document
+- [ ] Rate limiting avançat per projecte
 - [ ] Webhooks per processos asíncrons
 - [ ] Suport multi-idioma (actualment CAT/SPA/ENG)
+
+📋 **Veure roadmap complet**: [ROADMAP.md](./ROADMAP.md)
 
 ## Llicència
 
