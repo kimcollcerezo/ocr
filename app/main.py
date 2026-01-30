@@ -7,7 +7,8 @@ from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
-from app.routes import dni, permis, compare
+from app.routes import dni, permis
+# from app.routes import compare  # TODO: Implementar més endavant
 
 # Crear app
 app = FastAPI(
@@ -70,23 +71,13 @@ async def validate_api_key(request: Request, call_next):
 # Routes
 app.include_router(dni.router, prefix="/ocr", tags=["DNI"])
 app.include_router(permis.router, prefix="/ocr", tags=["Permís"])
-app.include_router(compare.router, prefix="/ocr", tags=["Comparació"])
+# app.include_router(compare.router, prefix="/ocr", tags=["Comparació"])  # TODO: Implementar més endavant
 
 
 @app.get("/")
 async def root():
-    """Health check"""
-    return {
-        "service": settings.app_name,
-        "version": settings.app_version,
-        "status": "running",
-        "endpoints": {
-            "dni": "/ocr/dni",
-            "permis": "/ocr/permis",
-            "compare": "/ocr/compare",
-            "docs": "/docs"
-        }
-    }
+    """Root endpoint - retorna només estat bàsic"""
+    return {"status": "ok"}
 
 
 @app.get("/health")
