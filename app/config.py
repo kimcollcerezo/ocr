@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     tesseract_enabled: bool = True
     tesseract_lang: str = "spa+cat+eng"
 
-    # API
-    api_key_enabled: bool = False
-    api_keys: list[str] = []
+    # API Security
+    api_key_enabled: bool = True
+    api_key: Optional[str] = None
 
     # Limits
     max_file_size_mb: int = 10
