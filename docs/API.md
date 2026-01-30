@@ -6,8 +6,30 @@ Aquesta és la documentació completa de l'API REST de l'Agent OCR.
 
 ```
 Desenvolupament: http://localhost:8000
-Producció: https://ocr-agent-production.up.railway.app
+Producció: https://ocr-production-abec.up.railway.app
 ```
+
+## Autenticació
+
+Tots els endpoints de processament (DNI, Permís) requereixen autenticació amb API Key.
+
+### API Key Header
+
+```http
+X-API-Key: your-api-key-here
+```
+
+### Endpoints públics (sense autenticació)
+
+- `GET /` - Root endpoint
+- `GET /health` - Health check
+
+### Endpoints protegits amb API Key
+
+- `GET /docs` - Documentació Swagger (requereix API Key)
+- `GET /redoc` - Documentació ReDoc (requereix API Key)
+- `POST /ocr/dni` - Processar DNI
+- `POST /ocr/permis` - Processar Permís de Circulació
 
 ## Documentació interactiva
 
@@ -64,6 +86,7 @@ Processa una imatge de DNI (frontal o posterior) i extreu les dades estructurade
 ```http
 POST /ocr/dni
 Content-Type: multipart/form-data
+X-API-Key: your-api-key-here
 ```
 
 #### Parameters
@@ -148,6 +171,7 @@ Content-Type: multipart/form-data
 |------|-------------|
 | 200 | DNI processat correctament |
 | 400 | Fitxer invàlid (no és una imatge) |
+| 401 | API key invàlida o no proporcionada |
 | 500 | Error intern del servidor |
 | 503 | Google Vision no disponible |
 
@@ -156,6 +180,7 @@ Content-Type: multipart/form-data
 **cURL:**
 ```bash
 curl -X POST "http://localhost:8000/ocr/dni" \
+  -H "X-API-Key: your-api-key-here" \
   -F "file=@dni_frontal.jpg" \
   -F "preprocess=true" \
   -F "preprocess_mode=standard"
@@ -170,6 +195,9 @@ formData.append('preprocess_mode', 'standard');
 
 const response = await fetch('http://localhost:8000/ocr/dni', {
   method: 'POST',
+  headers: {
+    'X-API-Key': 'your-api-key-here'
+  },
   body: formData
 });
 
@@ -181,9 +209,12 @@ console.log(result.data);
 ```python
 import requests
 
+headers = {'X-API-Key': 'your-api-key-here'}
+
 with open('dni.jpg', 'rb') as f:
     response = requests.post(
         'http://localhost:8000/ocr/dni',
+        headers=headers,
         files={'file': f},
         data={'preprocess': 'true', 'preprocess_mode': 'standard'}
     )
@@ -203,6 +234,7 @@ Processa una imatge del Permís de Circulació i extreu les dades del vehicle.
 ```http
 POST /ocr/permis
 Content-Type: multipart/form-data
+X-API-Key: your-api-key-here
 ```
 
 #### Parameters
@@ -261,6 +293,7 @@ Content-Type: multipart/form-data
 **cURL:**
 ```bash
 curl -X POST "http://localhost:8000/ocr/permis" \
+  -H "X-API-Key: your-api-key-here" \
   -F "file=@permis.jpg"
 ```
 
@@ -271,177 +304,14 @@ formData.append('file', fileInput.files[0]);
 
 const response = await fetch('http://localhost:8000/ocr/permis', {
   method: 'POST',
+  headers: {
+    'X-API-Key': 'your-api-key-here'
+  },
   body: formData
 });
 
 const result = await response.json();
 console.log(result.data);
-```
-
----
-
-### 4. Comparar motors OCR
-
-Compara diferents motors OCR i modes de preprocessament per trobar la millor configuració per una imatge.
-
-#### Request
-
-```http
-POST /ocr/compare
-Content-Type: multipart/form-data
-```
-
-#### Parameters
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| file | File | ✅ Sí | - | Imatge a processar |
-| engines | Array[String] | ❌ No | `["tesseract", "google_vision"]` | Motors a comparar |
-| preprocess_modes | Array[String] | ❌ No | `["standard", "aggressive"]` | Modes a comparar |
-
-**Engines disponibles**: `tesseract`, `google_vision`
-
-**Modes disponibles**: `none`, `standard`, `aggressive`, `document`
-
-#### Response
-
-```json
-{
-  "success": true,
-  "message": "Comparació completada: 4 combinacions testades",
-  "results": [
-    {
-      "engine": "tesseract",
-      "preprocess_mode": "standard",
-      "text": "Text extret amb Tesseract...",
-      "confidence": 66.8,
-      "processing_time": 0.842,
-      "success": true,
-      "error": null
-    },
-    {
-      "engine": "tesseract",
-      "preprocess_mode": "aggressive",
-      "text": "Text extret amb Tesseract (aggressive)...",
-      "confidence": 71.2,
-      "processing_time": 1.124,
-      "success": true,
-      "error": null
-    },
-    {
-      "engine": "google_vision",
-      "preprocess_mode": "standard",
-      "text": "Text extret amb Google Vision...",
-      "confidence": 95.0,
-      "processing_time": 1.234,
-      "success": true,
-      "error": null
-    },
-    {
-      "engine": "google_vision",
-      "preprocess_mode": "aggressive",
-      "text": "Text extret amb Google Vision (aggressive)...",
-      "confidence": 94.8,
-      "processing_time": 1.456,
-      "success": true,
-      "error": null
-    }
-  ],
-  "recommendations": {
-    "best_accuracy": "google_vision + standard (95.0% confiança)",
-    "best_speed": "tesseract + standard (0.842s)",
-    "best_balance": "google_vision + standard",
-    "recommended_engine": "google_vision"
-  }
-}
-```
-
-#### Camps de resposta
-
-**results[]:**
-| Camp | Type | Description |
-|------|------|-------------|
-| engine | String | Motor OCR usat |
-| preprocess_mode | String | Mode de preprocessament |
-| text | String | Text extret |
-| confidence | Float | Confiança (0-100) |
-| processing_time | Float | Temps de processament en segons |
-| success | Boolean | Si el processament ha tingut èxit |
-| error | String\|null | Missatge d'error si n'hi ha |
-
-**recommendations:**
-| Camp | Type | Description |
-|------|------|-------------|
-| best_accuracy | String | Combinació amb millor precisió |
-| best_speed | String | Combinació més ràpida |
-| best_balance | String | Millor equilibri precisió/velocitat |
-| recommended_engine | String | Motor recomanat globalment |
-
-#### Status Codes
-
-| Code | Description |
-|------|-------------|
-| 200 | Comparació completada |
-| 400 | Paràmetres invàlids |
-| 500 | Error intern |
-
-#### Examples
-
-**cURL:**
-```bash
-curl -X POST "http://localhost:8000/ocr/compare" \
-  -F "file=@document.jpg" \
-  -F "engines=tesseract" \
-  -F "engines=google_vision" \
-  -F "preprocess_modes=standard" \
-  -F "preprocess_modes=aggressive" \
-  -F "preprocess_modes=document"
-```
-
-**JavaScript:**
-```javascript
-const formData = new FormData();
-formData.append('file', fileInput.files[0]);
-
-// Afegir múltiples engines
-formData.append('engines', 'tesseract');
-formData.append('engines', 'google_vision');
-
-// Afegir múltiples modes
-formData.append('preprocess_modes', 'standard');
-formData.append('preprocess_modes', 'aggressive');
-
-const response = await fetch('http://localhost:8000/ocr/compare', {
-  method: 'POST',
-  body: formData
-});
-
-const result = await response.json();
-
-console.log('Millor precisió:', result.recommendations.best_accuracy);
-console.log('Més ràpid:', result.recommendations.best_speed);
-console.log('Recomanat:', result.recommendations.recommended_engine);
-```
-
-**Python:**
-```python
-import requests
-
-with open('document.jpg', 'rb') as f:
-    response = requests.post(
-        'http://localhost:8000/ocr/compare',
-        files={'file': f},
-        data={
-            'engines': ['tesseract', 'google_vision'],
-            'preprocess_modes': ['standard', 'aggressive']
-        }
-    )
-
-result = response.json()
-print(f"Recomanació: {result['recommendations']['recommended_engine']}")
-
-for r in result['results']:
-    print(f"{r['engine']} + {r['preprocess_mode']}: {r['confidence']}% ({r['processing_time']}s)")
 ```
 
 ---

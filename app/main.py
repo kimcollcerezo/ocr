@@ -36,7 +36,7 @@ async def validate_api_key(request: Request, call_next):
     Valida l'API key en cada petició (excepte endpoints públics)
     """
     # Endpoints públics (sense autenticació)
-    public_paths = ["/", "/health", "/docs", "/redoc", "/openapi.json"]
+    public_paths = ["/", "/health"]
 
     # Si l'endpoint és públic, permetre accés
     if request.url.path in public_paths:

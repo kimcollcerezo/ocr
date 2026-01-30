@@ -26,18 +26,21 @@ Railway és la plataforma recomanada per desplegar l'Agent OCR. Ofereix desplega
 ### Arquitectura a Railway
 
 ```
-Railway Project: ocr-agent-production
+Railway Project: ocr-production
 │
 ├── Service: ocr-agent
 │   ├── Source: GitHub repository
 │   ├── Build: Dockerfile (auto-detectat)
 │   ├── Port: 8000 (auto-detectat des de Dockerfile)
-│   └── Public URL: https://ocr-agent-production.up.railway.app
+│   └── Public URL: https://ocr-production-abec.up.railway.app
 │
 └── Variables d'entorn:
     ├── GOOGLE_CLOUD_CREDENTIALS_JSON
+    ├── GOOGLE_CLOUD_VISION_ENABLED
     ├── TESSERACT_ENABLED
-    └── TESSERACT_LANG
+    ├── TESSERACT_LANG
+    ├── API_KEY_ENABLED
+    └── API_KEY
 ```
 
 **Important**: No cal base de dades - l'agent és completament stateless.
@@ -69,10 +72,15 @@ Al dashboard de Railway:
 ```bash
 # Google Cloud Vision (OBLIGATORI)
 GOOGLE_CLOUD_CREDENTIALS_JSON='{"type":"service_account","project_id":"gogestor-ocr-485718","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"ocr-service@gogestor-ocr-485718.iam.gserviceaccount.com","client_id":"...","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"...","universe_domain":"googleapis.com"}'
+GOOGLE_CLOUD_VISION_ENABLED=true
 
 # Tesseract (OPCIONAL)
 TESSERACT_ENABLED=true
 TESSERACT_LANG=spa+cat+eng
+
+# API Security (OBLIGATORI per producció)
+API_KEY_ENABLED=true
+API_KEY=your-secure-api-key-here
 
 # Google Cloud Project ID (OPCIONAL)
 GOOGLE_CLOUD_PROJECT_ID=gogestor-ocr-485718
@@ -93,8 +101,8 @@ GOOGLE_CLOUD_PROJECT_ID=gogestor-ocr-485718
 
 Un cop desplegat:
 1. Railway assignarà una URL pública automàticament
-2. Format: `https://ocr-agent-production.up.railway.app`
-3. Copiar aquesta URL per usar-la al GoGestor
+2. URL actual: `https://ocr-production-abec.up.railway.app`
+3. Copiar aquesta URL per usar-la al GoGestor (variable `OCR_AGENT_URL`)
 
 ### Desplegaments futurs
 
@@ -288,100 +296,64 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
 
 Un cop desplegat l'Agent OCR a Railway, pots integrar-lo amb el backend de GoGestor.
 
-### 1. Afegir variable d'entorn al GoGestor (Railway)
+### 1. Afegir variables d'entorn al GoGestor (Railway)
 
-Al projecte de GoGestor a Railway:
+Al projecte de GoGestor a Railway, afegir les següents variables:
 
 ```bash
-OCR_AGENT_URL=https://ocr-agent-production.up.railway.app
+OCR_AGENT_URL=https://ocr-production-abec.up.railway.app
+OCR_AGENT_API_KEY=your-ocr-agent-api-key-here
+OCR_AGENT_TIMEOUT=30
+OCR_AGENT_ENABLED=true
 ```
 
-### 2. Implementar al backend de GoGestor
+### 2. Implementar al backend de GoGestor (PHP/Laravel)
 
-**Exemple amb Node.js/TypeScript:**
+Per a la integració completa amb exemples de codi PHP/Laravel, consulta:
 
-```typescript
-// backend/src/services/ocrService.ts
-import FormData from 'form-data';
-import fetch from 'node-fetch';
+📖 **[GOGESTOR_INTEGRATION.md](./GOGESTOR_INTEGRATION.md)** - Guia completa d'integració amb GoGestor
 
-const OCR_AGENT_URL = process.env.OCR_AGENT_URL || 'http://localhost:8000';
+Aquesta guia inclou:
+- Service layer complet (`OcrService.php`)
+- Exemples d'ús en controllers
+- Gestió d'errors
+- Validacions
+- Testing
+- Best practices
+- Jobs asíncrons
+- Cache de resultats
 
-export async function processarDNI(imageBuffer: Buffer, filename: string) {
-  const formData = new FormData();
-  formData.append('file', imageBuffer, filename);
-  formData.append('preprocess', 'true');
-  formData.append('preprocess_mode', 'standard');
+**Exemple ràpid:**
 
-  const response = await fetch(`${OCR_AGENT_URL}/ocr/dni`, {
-    method: 'POST',
-    body: formData,
-  });
+```php
+// app/Services/OcrService.php
+use Illuminate\Support\Facades\Http;
 
-  if (!response.ok) {
-    throw new Error(`OCR Agent error: ${response.statusText}`);
-  }
+public function processarDNI($file) {
+    $response = Http::timeout(30)
+        ->withHeaders(['X-API-Key' => config('services.ocr_agent.api_key')])
+        ->attach('file', file_get_contents($file->getRealPath()), $file->getClientOriginalName())
+        ->post(config('services.ocr_agent.url') . '/ocr/dni', [
+            'preprocess' => true,
+            'preprocess_mode' => 'standard'
+        ]);
 
-  const result = await response.json();
-
-  if (!result.success) {
-    throw new Error(result.message || 'Error processant DNI');
-  }
-
-  return result.data;
-}
-
-export async function processarPermis(imageBuffer: Buffer, filename: string) {
-  const formData = new FormData();
-  formData.append('file', imageBuffer, filename);
-
-  const response = await fetch(`${OCR_AGENT_URL}/ocr/permis`, {
-    method: 'POST',
-    body: formData,
-  });
-
-  if (!response.ok) {
-    throw new Error(`OCR Agent error: ${response.statusText}`);
-  }
-
-  const result = await response.json();
-
-  if (!result.success) {
-    throw new Error(result.message || 'Error processant permís');
-  }
-
-  return result.data;
+    return $response->successful() ? $response->json()['data'] : null;
 }
 ```
 
-### 3. Usar al controlador
+**Ús al controller:**
 
-```typescript
-// backend/src/controllers/documentController.ts
-import { processarDNI, processarPermis } from '../services/ocrService';
+```php
+// app/Http/Controllers/DocumentController.php
+public function uploadDNI(Request $request) {
+    $dniData = app(OcrService::class)->processarDNI($request->file('dni'));
 
-export async function uploadDNI(req, res) {
-  try {
-    const imageBuffer = req.file.buffer;
-    const filename = req.file.originalname;
+    if (!$dniData) {
+        return response()->json(['error' => 'Error processant DNI'], 500);
+    }
 
-    const dniData = await processarDNI(imageBuffer, filename);
-
-    // Guardar a la base de dades
-    await db.documents.create({
-      type: 'DNI',
-      dni: dniData.dni,
-      nom_complet: dniData.nom_complet,
-      data_naixement: dniData.data_naixement,
-      adreca_completa: dniData.adreca_completa,
-      ...
-    });
-
-    res.json({ success: true, data: dniData });
-  } catch (error) {
-    console.error('Error processant DNI:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+    return response()->json(['success' => true, 'data' => $dniData]);
 }
 ```
 

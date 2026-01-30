@@ -7,10 +7,11 @@ API REST per processar documents espanyols (DNI i Permís de Circulació) utilit
 - **OCR d'alta precisió** amb Google Cloud Vision API (95% confidence)
 - **Processament d'imatges** amb OpenCV (8 tècniques de preprocessament)
 - **Parsers especialitzats** per DNI i Permís de Circulació
-- **Comparació d'engines** OCR (Tesseract vs Google Vision)
 - **API REST** amb FastAPI i documentació automàtica (Swagger)
+- **Autenticació amb API Key** per protegir l'accés
 - **Múltiples modes** de preprocessament: standard, aggressive, document
 - **Stateless** - No requereix base de dades
+- **Desplegat a producció** a Railway: https://ocr-production-abec.up.railway.app
 
 ## Documents suportats
 
@@ -115,8 +116,12 @@ El servidor estarà disponible a: http://localhost:8000
 
 ### Documentació API interactiva
 
+⚠️ **Nota**: Els endpoints de documentació requereixen API Key en producció
+
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
+
+Per accedir a la documentació en producció, afegeix el header `X-API-Key`
 
 ### Exemples d'ús
 
@@ -141,6 +146,7 @@ curl http://localhost:8000/health
 
 ```bash
 curl -X POST "http://localhost:8000/ocr/dni" \
+  -H "X-API-Key: your-api-key-here" \
   -F "file=@dni_frontal.jpg" \
   -F "preprocess=true" \
   -F "preprocess_mode=standard"
@@ -178,6 +184,7 @@ curl -X POST "http://localhost:8000/ocr/dni" \
 
 ```bash
 curl -X POST "http://localhost:8000/ocr/permis" \
+  -H "X-API-Key: your-api-key-here" \
   -F "file=@permis.jpg"
 ```
 
@@ -196,49 +203,6 @@ curl -X POST "http://localhost:8000/ocr/permis" \
     "titular": "COLL CEREZO JOAQUIN",
     "confidence": 95.0,
     "ocr_engine": "google_vision"
-  }
-}
-```
-
-#### 4. Comparar engines OCR
-
-```bash
-curl -X POST "http://localhost:8000/ocr/compare" \
-  -F "file=@document.jpg" \
-  -F "engines=tesseract" \
-  -F "engines=google_vision" \
-  -F "preprocess_modes=standard" \
-  -F "preprocess_modes=aggressive"
-```
-
-**Resposta:**
-```json
-{
-  "success": true,
-  "message": "Comparació completada: 4 combinacions testades",
-  "results": [
-    {
-      "engine": "tesseract",
-      "preprocess_mode": "standard",
-      "text": "Text extret...",
-      "confidence": 66.8,
-      "processing_time": 0.842,
-      "success": true
-    },
-    {
-      "engine": "google_vision",
-      "preprocess_mode": "standard",
-      "text": "Text extret amb millor precisió...",
-      "confidence": 95.0,
-      "processing_time": 1.234,
-      "success": true
-    }
-  ],
-  "recommendations": {
-    "best_accuracy": "google_vision + standard (95.0% confiança)",
-    "best_speed": "tesseract + standard (0.842s)",
-    "best_balance": "google_vision + standard",
-    "recommended_engine": "google_vision"
   }
 }
 ```
@@ -276,8 +240,11 @@ async function processarDNI(file) {
   formData.append('preprocess', 'true');
   formData.append('preprocess_mode', 'standard');
 
-  const response = await fetch('https://ocr-agent.up.railway.app/ocr/dni', {
+  const response = await fetch('https://ocr-production-abec.up.railway.app/ocr/dni', {
     method: 'POST',
+    headers: {
+      'X-API-Key': 'your-api-key-here'
+    },
     body: formData
   });
 
@@ -298,11 +265,13 @@ async function processarDNI(file) {
 ```php
 use Illuminate\Support\Facades\Http;
 
-$response = Http::attach(
+$response = Http::withHeaders([
+    'X-API-Key' => env('OCR_AGENT_API_KEY')
+])->attach(
     'file',
     file_get_contents($filePath),
     'dni.jpg'
-)->post('https://ocr-agent.up.railway.app/ocr/dni', [
+)->post(env('OCR_AGENT_URL') . '/ocr/dni', [
     'preprocess' => true,
     'preprocess_mode' => 'standard'
 ]);
@@ -314,10 +283,16 @@ $dniData = $response->json()['data'];
 
 ```python
 import requests
+import os
+
+headers = {
+    'X-API-Key': os.getenv('OCR_AGENT_API_KEY')
+}
 
 with open('dni.jpg', 'rb') as f:
     response = requests.post(
-        'https://ocr-agent.up.railway.app/ocr/dni',
+        os.getenv('OCR_AGENT_URL') + '/ocr/dni',
+        headers=headers,
         files={'file': f},
         data={'preprocess': 'true', 'preprocess_mode': 'standard'}
     )
@@ -347,8 +322,7 @@ OCR/
 │   │   └── permis_parser.py
 │   └── routes/                 # Endpoints API
 │       ├── dni.py
-│       ├── permis.py
-│       └── compare.py
+│       └── permis.py
 ├── docs/                       # Documentació
 │   ├── API.md
 │   ├── DEPLOYMENT.md
@@ -426,11 +400,13 @@ Consulta [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) per configurar l'entorn de d
 
 ## Seguretat
 
+- **Autenticació amb API Key** - Tots els endpoints protegits amb `X-API-Key` header
 - Les credencials de Google Cloud Vision es guarden com a variable d'entorn
 - **No es guarden imatges** - Tot el processament és en memòria
 - Les imatges temporals s'eliminen automàticament després del processament
 - CORS configurat per seguretat
 - Servei completament stateless (sense base de dades)
+- GitHub repository privat per protegir el codi
 
 ## Tecnologies utilitzades
 
@@ -446,11 +422,12 @@ Consulta [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) per configurar l'entorn de d
 
 ## Roadmap
 
+- [x] Autenticació amb API keys ✅
+- [ ] Comparació d'engines OCR (Tesseract vs Google Vision)
 - [ ] Suport per més documents (NIE, Passaport, Factures, Contractes)
 - [ ] Detecció automàtica del tipus de document
 - [ ] Cache de resultats per optimitzar costos
 - [ ] Dashboard d'estadístiques i mètriques
-- [ ] Autenticació amb API keys
 - [ ] Rate limiting avançat
 - [ ] Webhooks per processos asíncrons
 - [ ] Suport multi-idioma (actualment CAT/SPA/ENG)
