@@ -1,12 +1,20 @@
+# =============================================================================
 # Python
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Virtual environments
 env/
 venv/
 ENV/
+env.bak/
+venv.bak/
+
+# Distribution / packaging
 build/
 develop-eggs/
 dist/
@@ -19,31 +27,227 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Environment
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# =============================================================================
+# Environment & Credentials (IMPORTANT - NO COMMITIR MAI!)
+# =============================================================================
+# Variables d'entorn
 .env
 .env.local
 .env.*.local
+.env.production
+.env.development
 
-# IDE
+# Credencials de Google Cloud
+credentials.json
+*-credentials.json
+google-cloud-*.json
+service-account-*.json
+
+# Altres credencials
+*.pem
+*.key
+*.crt
+secrets/
+.secrets/
+
+# =============================================================================
+# IDE i Editors
+# =============================================================================
+# VS Code
 .vscode/
+*.code-workspace
+
+# PyCharm
 .idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
 *.swp
 *.swo
+*~
 
-# OS
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# =============================================================================
+# Sistema Operatiu
+# =============================================================================
+# macOS
 .DS_Store
-Thumbs.db
+.AppleDouble
+.LSOverride
+Icon
+._*
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# =============================================================================
+# Fitxers del projecte OCR (NO commitir!)
+# =============================================================================
+# Imatges de test amb dades reals
+test-images/
+test_images/
+images/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# EXCEPCIÓ: Permet imatges d'exemple (si vols)
+# !docs/examples/*.jpg
+# !docs/examples/*.png
+
+# Imatges processades i temporals
+*_processed.jpg
+*_processed.png
+debug_images/
+temp_images/
+processed/
+
+# Logs
+*.log
+logs/
+*.log.*
 
 # Temporary files
-*.log
 temp/
 tmp/
+*.tmp
+*.bak
+
+# Output de Tesseract/Google Vision
+ocr_output/
+output/
+results/
+
+# Cache
+.cache/
+cache/
+
+# =============================================================================
+# Docker
+# =============================================================================
+docker-compose.override.yml
+.dockerignore
+
+# =============================================================================
+# Database (si s'afegeix en el futur)
+# =============================================================================
+*.db
+*.sqlite
+*.sqlite3
+db.sqlite3
+
+# =============================================================================
+# Jupyter Notebooks (si s'usa per testing)
+# =============================================================================
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# =============================================================================
+# mypy
+# =============================================================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# =============================================================================
+# Pyre type checker
+# =============================================================================
+.pyre/
+
+# =============================================================================
+# pytype static type analyzer
+# =============================================================================
+.pytype/
+
+# =============================================================================
+# Celery (si s'implementa tasques asíncrones)
+# =============================================================================
+celerybeat-schedule
+celerybeat.pid
+
+# =============================================================================
+# SageMath parsed files
+# =============================================================================
+*.sage.py
+
+# =============================================================================
+# Spyder project settings
+# =============================================================================
+.spyderproject
+.spyproject
+
+# =============================================================================
+# Rope project settings
+# =============================================================================
+.ropeproject
+
+# =============================================================================
+# mkdocs documentation
+# =============================================================================
+/site
+
+# =============================================================================
+# Notes importants
+# =============================================================================
+# 1. SEMPRE revisar abans de fer commit que no hi ha credencials
+# 2. Usar: git status i git diff abans de commit
+# 3. Si has commitit credencials per error:
+#    - Rotar les credencials immediatament
+#    - Netejar l'historial de Git: git filter-branch
+#    - Force push: git push --force
+# 4. Les imatges amb dades reals NOMÉS en local, MAI al repositori
+# =============================================================================
