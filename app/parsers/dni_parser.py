@@ -250,6 +250,16 @@ class DNIParser:
             if full_text_data.mare:
                 mrz_data.mare = full_text_data.mare
 
+            # Preferir cognoms de full_text si són millors (amb espais)
+            # La MRZ pot tenir errors de lectura dels caràcters < que separen cognoms
+            if full_text_data.cognoms and ' ' in full_text_data.cognoms:
+                # Si full_text té cognoms amb espai i MRZ no, preferir full_text
+                if not mrz_data.cognoms or ' ' not in mrz_data.cognoms:
+                    mrz_data.cognoms = full_text_data.cognoms
+                    # Recalcular nom_complet
+                    if mrz_data.nom:
+                        mrz_data.nom_complet = f"{mrz_data.nom} {mrz_data.cognoms}"
+
             return mrz_data
 
         # Si MRZ falla, intentar text complet
