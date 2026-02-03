@@ -109,15 +109,44 @@ class DNIParser:
         if dni_match:
             dni_data.dni = dni_match.group(1)
 
+        # Keywords que indiquen el final d'un camp
+        FIELD_KEYWORDS = [
+            'APELLIDOS', 'COGNOMS', 'NOMBRE', 'NOM', 'SEXO', 'SEXE',
+            'NACIONALIDAD', 'NACIONALITAT', 'FECHA', 'DATA',
+            'DOMICILIO', 'DOMICILI', 'LUGAR', 'LLOC', 'PADRE', 'PARE',
+            'MADRE', 'MARE', 'DNI', 'EQUIPO', 'EQUIP', 'IDNUM'
+        ]
+
+        def read_field_lines(lines, start_idx):
+            """Llegeix línies fins trobar el següent keyword o línia buida"""
+            field_lines = []
+            for j in range(start_idx, len(lines)):
+                line_content = lines[j].strip()
+
+                # Aturar si línia buida
+                if not line_content:
+                    break
+
+                # Aturar si trobem un keyword (excepte si és la primera línia)
+                line_upper = line_content.upper()
+                if j > start_idx and any(keyword in line_upper for keyword in FIELD_KEYWORDS):
+                    break
+
+                field_lines.append(line_content)
+
+            return ' '.join(field_lines)
+
         # Buscar nom i cognoms
         lines = text.split('\n')
         for i, line in enumerate(lines):
             if 'APELLIDOS' in line.upper() or 'COGNOMS' in line.upper():
                 if i + 1 < len(lines):
-                    dni_data.cognoms = lines[i + 1].strip()
+                    dni_data.cognoms = read_field_lines(lines, i + 1)
             elif 'NOMBRE' in line.upper() or 'NOM' in line.upper():
-                if i + 1 < len(lines):
-                    dni_data.nom = lines[i + 1].strip()
+                # Evitar confusió amb "NOMBRE DEL PADRE" o "NOM DEL PARE"
+                if 'PADRE' not in line.upper() and 'PARE' not in line.upper() and 'MADRE' not in line.upper() and 'MARE' not in line.upper():
+                    if i + 1 < len(lines):
+                        dni_data.nom = read_field_lines(lines, i + 1)
 
             # Buscar adreça (DOMICILIO / DOMICILI)
             elif 'DOMICILIO' in line.upper() or 'DOMICILI' in line.upper():
@@ -199,8 +228,36 @@ class DNIParser:
                     # Adreça completa (només primeres 4 línies màxim)
                     dni_data.adreca_completa = ', '.join(adreca_lines[:4])
 
+            # Buscar data de naixement
+            elif ('FECHA' in line.upper() and 'NACIMIENTO' in line.upper()) or ('DATA' in line.upper() and 'NAIXEMENT' in line.upper()):
+                if i + 1 < len(lines):
+                    data_str = lines[i + 1].strip()
+                    # Buscar format DD MM YYYY o DD/MM/YYYY
+                    date_match = re.search(r'(\d{2})[\s/](\d{2})[\s/](\d{4})', data_str)
+                    if date_match:
+                        dni_data.data_naixement = f"{date_match.group(1)}/{date_match.group(2)}/{date_match.group(3)}"
+
+            # Buscar sexe
+            elif 'SEXO' in line.upper() or 'SEXE' in line.upper():
+                if i + 1 < len(lines):
+                    sexe_str = lines[i + 1].strip().upper()
+                    if 'M' in sexe_str or 'H' in sexe_str:
+                        dni_data.sexe = "Home"
+                    elif 'F' in sexe_str or 'D' in sexe_str or 'MUJER' in sexe_str or 'DONA' in sexe_str:
+                        dni_data.sexe = "Dona"
+
+            # Buscar nacionalitat
+            elif 'NACIONALIDAD' in line.upper() or 'NACIONALITAT' in line.upper():
+                if i + 1 < len(lines):
+                    nac_str = lines[i + 1].strip()
+                    # Buscar codi de 3 lletres (ESP, FRA, etc) o nom complet
+                    if len(nac_str) <= 3 and nac_str.isalpha():
+                        dni_data.nacionalitat = nac_str.upper()
+                    elif 'ESPA' in nac_str.upper():
+                        dni_data.nacionalitat = "ESP"
+
             # Buscar lloc de naixement
-            elif 'LUGAR' in line.upper() and 'NACIMIENTO' in line.upper() or 'LLOC' in line.upper() and 'NAIXEMENT' in line.upper():
+            elif ('LUGAR' in line.upper() and 'NACIMIENTO' in line.upper()) or ('LLOC' in line.upper() and 'NAIXEMENT' in line.upper()):
                 if i + 1 < len(lines):
                     dni_data.lloc_naixement = lines[i + 1].strip()
 
