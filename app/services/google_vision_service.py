@@ -51,7 +51,7 @@ class GoogleVisionService:
             image_path: Path a la imatge
 
         Returns:
-            dict amb 'text' i 'confidence'
+            dict amb 'text', 'confidence' i 'annotations'
         """
         if not self.is_available():
             raise RuntimeError("Google Vision no està disponible")
@@ -66,14 +66,24 @@ class GoogleVisionService:
             raise Exception(f"Google Vision API error: {response.error.message}")
 
         if not response.text_annotations:
-            return {"text": "", "confidence": 0.0}
+            return {"text": "", "confidence": 0.0, "annotations": []}
 
         # Primer annotation conté tot el text
         full_text = response.text_annotations[0].description
 
+        # Retornar també les annotations amb bounding boxes
+        annotations = []
+        for annotation in response.text_annotations[1:]:  # Saltar el primer (full text)
+            vertices = [(vertex.x, vertex.y) for vertex in annotation.bounding_poly.vertices]
+            annotations.append({
+                "text": annotation.description,
+                "vertices": vertices
+            })
+
         return {
             "text": full_text,
-            "confidence": 95.0  # Google Vision no retorna confidence directament
+            "confidence": 95.0,
+            "annotations": annotations
         }
 
     def detect_document_text(self, image_path: str) -> dict:

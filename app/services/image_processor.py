@@ -50,6 +50,44 @@ class ImageProcessor:
         return image
 
     @staticmethod
+    def _calculate_horizontal_score(annotations: list) -> float:
+        """
+        Calcula un score de quant horitzontal està el text
+        Analitza les bounding boxes per veure si width > height
+        """
+        if not annotations:
+            return 0.0
+
+        horizontal_count = 0
+        total_count = 0
+
+        for annotation in annotations:
+            vertices = annotation.get('vertices', [])
+            if len(vertices) < 4:
+                continue
+
+            # Calcular amplada i alçada del bounding box
+            min_x = min(v[0] for v in vertices)
+            max_x = max(v[0] for v in vertices)
+            min_y = min(v[1] for v in vertices)
+            max_y = max(v[1] for v in vertices)
+
+            width = max_x - min_x
+            height = max_y - min_y
+
+            # Si width > height, el text és horitzontal
+            if width > height:
+                horizontal_count += 1
+
+            total_count += 1
+
+        if total_count == 0:
+            return 0.0
+
+        # Retornar percentatge de text horitzontal
+        return (horizontal_count / total_count) * 100
+
+    @staticmethod
     def detect_and_fix_orientation(image: np.ndarray) -> np.ndarray:
         """
         Detecta i corregeix orientació de 90/180/270 graus
@@ -83,12 +121,16 @@ class ImageProcessor:
 
                     # Detectar text amb Google Vision
                     result = google_vision_service.detect_text(tmp_path)
-                    text = result.get('text', '')
+                    annotations = result.get('annotations', [])
 
-                    # Calcular puntuació: nombre de caràcters alfanumèrics
-                    score = sum(c.isalnum() for c in text)
+                    # Calcular score basat en text horitzontal
+                    horizontal_score = ImageProcessor._calculate_horizontal_score(annotations)
+                    char_count = len(annotations)
 
-                    print(f"   {angle_name}: {score} caràcters detectats")
+                    # Score combinat: prioritzar text horitzontal, però també quantitat
+                    score = (horizontal_score * 2) + (char_count * 0.1)
+
+                    print(f"   {angle_name}: {horizontal_score:.1f}% horitzontal, {char_count} paraules (score: {score:.1f})")
 
                     if score > best_score:
                         best_score = score
@@ -103,9 +145,9 @@ class ImageProcessor:
                     continue
 
             if best_angle_name != "0°":
-                print(f"✅ Millor orientació detectada: {best_angle_name} (score: {best_score})")
+                print(f"✅ Millor orientació detectada: {best_angle_name} (score: {best_score:.1f})")
             else:
-                print(f"✅ Orientació original correcta (score: {best_score})")
+                print(f"✅ Orientació original correcta (score: {best_score:.1f})")
 
             return best_image
 
