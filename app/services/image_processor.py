@@ -6,7 +6,8 @@ import numpy as np
 from PIL import Image, ImageEnhance
 from typing import Tuple, Optional
 import os
-import pytesseract
+import tempfile
+from app.services.google_vision_service import google_vision_service
 
 
 class ImageProcessor:
@@ -52,90 +53,66 @@ class ImageProcessor:
     def detect_and_fix_orientation(image: np.ndarray) -> np.ndarray:
         """
         Detecta i corregeix orientació de 90/180/270 graus
-        Utilitza Tesseract OSD (Orientation and Script Detection)
+        Utilitza Google Vision per provar cada orientació
         """
+        if not google_vision_service.is_available():
+            print("⚠️  Google Vision no disponible, saltant detecció d'orientació")
+            return image
+
         try:
-            # Convertir a PIL Image per Tesseract
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb_image)
+            # Provar cada orientació possible
+            orientations = [
+                (0, image, "0°"),
+                (90, cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE), "90° (antihorari)"),
+                (180, cv2.rotate(image, cv2.ROTATE_180), "180°"),
+                (270, cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE), "270° (horari)")
+            ]
 
-            # Detectar orientació amb Tesseract OSD
-            try:
-                osd = pytesseract.image_to_osd(pil_image)
+            best_score = 0
+            best_image = image
+            best_angle_name = "0°"
 
-                # Extreure angle de rotació
-                rotation_angle = None
-                for line in osd.split('\n'):
-                    if 'Rotate:' in line:
-                        rotation_angle = int(line.split(':')[1].strip())
-                        break
+            print("🔄 Detectant orientació amb Google Vision...")
 
-                if rotation_angle is not None and rotation_angle != 0:
-                    print(f"🔄 Detectada rotació de {rotation_angle} graus, corregint...")
+            for angle, rotated, angle_name in orientations:
+                try:
+                    # Guardar imatge rotada temporalment
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                        tmp_path = tmp_file.name
+                        cv2.imwrite(tmp_path, rotated)
 
-                    # Rotar la imatge
-                    if rotation_angle == 90:
-                        rotated = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                    elif rotation_angle == 180:
-                        rotated = cv2.rotate(image, cv2.ROTATE_180)
-                    elif rotation_angle == 270:
-                        rotated = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
-                    else:
-                        rotated = image
+                    # Detectar text amb Google Vision
+                    result = google_vision_service.detect_text(tmp_path)
+                    text = result.get('text', '')
 
-                    return rotated
+                    # Calcular puntuació: nombre de caràcters alfanumèrics
+                    score = sum(c.isalnum() for c in text)
 
-            except Exception as osd_error:
-                print(f"⚠️  OSD no ha pogut detectar orientació: {osd_error}")
-                # Si OSD falla, provar mètode alternatiu
-                return ImageProcessor._detect_orientation_by_text_density(image)
+                    print(f"   {angle_name}: {score} caràcters detectats")
+
+                    if score > best_score:
+                        best_score = score
+                        best_image = rotated
+                        best_angle_name = angle_name
+
+                    # Esborrar fitxer temporal
+                    os.unlink(tmp_path)
+
+                except Exception as e:
+                    print(f"⚠️  Error provant orientació {angle_name}: {e}")
+                    continue
+
+            if best_angle_name != "0°":
+                print(f"✅ Millor orientació detectada: {best_angle_name} (score: {best_score})")
+            else:
+                print(f"✅ Orientació original correcta (score: {best_score})")
+
+            return best_image
 
         except Exception as e:
             print(f"⚠️  Error detectant orientació: {e}")
+            return image
 
-        return image
-
-    @staticmethod
-    def _detect_orientation_by_text_density(image: np.ndarray) -> np.ndarray:
-        """
-        Mètode alternatiu: provar les 4 orientacions i triar la que té més text detectat
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        # Provar cada orientació
-        orientations = [
-            (0, image),
-            (90, cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)),
-            (180, cv2.rotate(image, cv2.ROTATE_180)),
-            (270, cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE))
-        ]
-
-        best_score = 0
-        best_image = image
-
-        for angle, rotated in orientations:
-            try:
-                # Convertir a PIL
-                rgb = cv2.cvtColor(rotated, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb)
-
-                # Detectar text amb Tesseract
-                text = pytesseract.image_to_string(pil_img)
-
-                # Calcular puntuació (nombre de caràcters alfanumèrics)
-                score = sum(c.isalnum() for c in text)
-
-                if score > best_score:
-                    best_score = score
-                    best_image = rotated
-                    if angle != 0:
-                        print(f"✅ Millor orientació detectada: {angle}° (score: {score})")
-
-            except Exception as e:
-                print(f"⚠️  Error provant orientació {angle}°: {e}")
-                continue
-
-        return best_image
 
     @staticmethod
     def enhance_contrast(image: np.ndarray) -> np.ndarray:
