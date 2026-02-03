@@ -109,6 +109,7 @@ class ImageProcessor:
             best_score = 0
             best_image = image
             best_angle_name = "0°"
+            original_score = 0
 
             print("🔄 Detectant orientació amb Google Vision...")
 
@@ -132,6 +133,10 @@ class ImageProcessor:
 
                     print(f"   {angle_name}: {horizontal_score:.1f}% horitzontal, {char_count} paraules (score: {score:.1f})")
 
+                    # Guardar score original
+                    if angle == 0:
+                        original_score = score
+
                     if score > best_score:
                         best_score = score
                         best_image = rotated
@@ -144,10 +149,19 @@ class ImageProcessor:
                     print(f"⚠️  Error provant orientació {angle_name}: {e}")
                     continue
 
-            if best_angle_name != "0°":
-                print(f"✅ Millor orientació detectada: {best_angle_name} (score: {best_score:.1f})")
+            # Només aplicar rotació si la millora és significativa (>5% del score)
+            THRESHOLD = original_score * 0.05  # 5% de millora mínima
+            improvement = best_score - original_score
+
+            if best_angle_name != "0°" and improvement > THRESHOLD:
+                print(f"✅ Millor orientació detectada: {best_angle_name} (score: {best_score:.1f}, millora: {improvement:.1f})")
             else:
-                print(f"✅ Orientació original correcta (score: {best_score:.1f})")
+                if best_angle_name != "0°" and improvement <= THRESHOLD:
+                    print(f"ℹ️  Diferència massa petita ({improvement:.1f}), mantenint orientació original")
+                else:
+                    print(f"✅ Orientació original correcta (score: {best_score:.1f})")
+                best_image = image
+                best_angle_name = "0°"
 
             return best_image
 
