@@ -64,10 +64,16 @@ class DNIParser:
             nacionalitat = line2[15:18].replace('<', '').strip()
 
             # Línia 3: Cognoms i nom
-            line3 = mrz_lines[2].replace('<<', ' ').replace('<', ' ').strip()
-            parts = line3.split('  ')
-            cognoms = parts[0].strip() if len(parts) > 0 else None
-            nom = parts[1].strip() if len(parts) > 1 else None
+            # Format MRZ: COGNOMS<<NOM (on < és espai dins cognoms/nom, << separa cognoms de nom)
+            line3 = mrz_lines[2].replace(' ', '')
+            if '<<' in line3:
+                parts = line3.split('<<', 1)
+                cognoms = parts[0].replace('<', ' ').strip()
+                nom = parts[1].replace('<', ' ').strip() if len(parts) > 1 else None
+            else:
+                # Fallback si no hi ha <<
+                cognoms = line3.replace('<', ' ').strip()
+                nom = None
 
             # Convertir dates
             def convert_date(date_str: str) -> str:
