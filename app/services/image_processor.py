@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image, ImageEnhance
 from typing import Tuple, Optional
 import os
+import pytesseract
 
 
 class ImageProcessor:
@@ -46,6 +47,95 @@ class ImageProcessor:
                 return rotated
 
         return image
+
+    @staticmethod
+    def detect_and_fix_orientation(image: np.ndarray) -> np.ndarray:
+        """
+        Detecta i corregeix orientació de 90/180/270 graus
+        Utilitza Tesseract OSD (Orientation and Script Detection)
+        """
+        try:
+            # Convertir a PIL Image per Tesseract
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_image)
+
+            # Detectar orientació amb Tesseract OSD
+            try:
+                osd = pytesseract.image_to_osd(pil_image)
+
+                # Extreure angle de rotació
+                rotation_angle = None
+                for line in osd.split('\n'):
+                    if 'Rotate:' in line:
+                        rotation_angle = int(line.split(':')[1].strip())
+                        break
+
+                if rotation_angle is not None and rotation_angle != 0:
+                    print(f"🔄 Detectada rotació de {rotation_angle} graus, corregint...")
+
+                    # Rotar la imatge
+                    if rotation_angle == 90:
+                        rotated = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                    elif rotation_angle == 180:
+                        rotated = cv2.rotate(image, cv2.ROTATE_180)
+                    elif rotation_angle == 270:
+                        rotated = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+                    else:
+                        rotated = image
+
+                    return rotated
+
+            except Exception as osd_error:
+                print(f"⚠️  OSD no ha pogut detectar orientació: {osd_error}")
+                # Si OSD falla, provar mètode alternatiu
+                return ImageProcessor._detect_orientation_by_text_density(image)
+
+        except Exception as e:
+            print(f"⚠️  Error detectant orientació: {e}")
+
+        return image
+
+    @staticmethod
+    def _detect_orientation_by_text_density(image: np.ndarray) -> np.ndarray:
+        """
+        Mètode alternatiu: provar les 4 orientacions i triar la que té més text detectat
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Provar cada orientació
+        orientations = [
+            (0, image),
+            (90, cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+            (180, cv2.rotate(image, cv2.ROTATE_180)),
+            (270, cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE))
+        ]
+
+        best_score = 0
+        best_image = image
+
+        for angle, rotated in orientations:
+            try:
+                # Convertir a PIL
+                rgb = cv2.cvtColor(rotated, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb)
+
+                # Detectar text amb Tesseract
+                text = pytesseract.image_to_string(pil_img)
+
+                # Calcular puntuació (nombre de caràcters alfanumèrics)
+                score = sum(c.isalnum() for c in text)
+
+                if score > best_score:
+                    best_score = score
+                    best_image = rotated
+                    if angle != 0:
+                        print(f"✅ Millor orientació detectada: {angle}° (score: {score})")
+
+            except Exception as e:
+                print(f"⚠️  Error provant orientació {angle}°: {e}")
+                continue
+
+        return best_image
 
     @staticmethod
     def enhance_contrast(image: np.ndarray) -> np.ndarray:
@@ -226,6 +316,11 @@ class ImageProcessor:
 
         # Processos comuns
         image = ImageProcessor.resize_if_needed(image)
+
+        # Primer corregir orientació de 90/180/270 graus
+        image = ImageProcessor.detect_and_fix_orientation(image)
+
+        # Després corregir petites desviacions d'angle
         image = ImageProcessor.detect_and_fix_rotation(image)
 
         if mode == "aggressive":
