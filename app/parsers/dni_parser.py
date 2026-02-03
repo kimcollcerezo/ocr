@@ -126,6 +126,20 @@ class DNIParser:
                         break
 
                 if adreca_lines:
+                    # Províncies espanyoles conegudes
+                    PROVINCIES_ESPANYOLES = [
+                        'BARCELONA', 'TARRAGONA', 'LLEIDA', 'GIRONA',  # Catalunya
+                        'MADRID', 'VALENCIA', 'ALICANTE', 'CASTELLON', 'CASTELLÓ',
+                        'SEVILLA', 'MALAGA', 'CADIZ', 'HUELVA', 'CORDOBA', 'GRANADA', 'JAEN', 'ALMERIA',
+                        'ZARAGOZA', 'HUESCA', 'TERUEL',
+                        'A CORUÑA', 'PONTEVEDRA', 'OURENSE', 'LUGO',
+                        'VIZCAYA', 'GUIPUZCOA', 'ALAVA', 'BIZKAIA', 'GIPUZKOA', 'ARABA',
+                        'NAVARRA', 'LA RIOJA', 'CANTABRIA', 'ASTURIAS',
+                        'MURCIA', 'BADAJOZ', 'CACERES', 'SALAMANCA', 'ZAMORA', 'VALLADOLID',
+                        'LEON', 'PALENCIA', 'BURGOS', 'SORIA', 'SEGOVIA', 'AVILA',
+                        'TOLEDO', 'CIUDAD REAL', 'CUENCA', 'GUADALAJARA', 'ALBACETE'
+                    ]
+
                     # Primera línia: carrer i número
                     if len(adreca_lines) > 0:
                         # Netejar abreviatures comunes
@@ -139,8 +153,25 @@ class DNIParser:
                         else:
                             dni_data.carrer = line0
 
-                    # Segona línia: població
-                    if len(adreca_lines) > 1:
+                    # Detectar província a la darrera línia
+                    provincia_idx = None
+                    for idx in range(len(adreca_lines) - 1, 0, -1):
+                        line_upper = adreca_lines[idx].upper().strip()
+                        if any(prov in line_upper for prov in PROVINCIES_ESPANYOLES):
+                            provincia_idx = idx
+                            dni_data.provincia = adreca_lines[idx].strip()
+                            break
+
+                    # Si hem trobat província, la línia anterior és la població
+                    if provincia_idx and provincia_idx > 1:
+                        poblacio_line = adreca_lines[provincia_idx - 1]
+
+                        # Treure codi postal si existeix
+                        poblacio_line = re.sub(r'^\d{5}\s+', '', poblacio_line)
+                        dni_data.poblacio = poblacio_line.strip()
+
+                    # Si no hem trobat província, usar el mètode antic
+                    elif len(adreca_lines) > 1:
                         # Format: "POBLACIÓ (PROVÍNCIA)" o "CP POBLACIÓ (PROVÍNCIA)"
                         poblacio_line = adreca_lines[1]
 
@@ -155,12 +186,12 @@ class DNIParser:
                         poblacio_line = re.sub(r'^\d{5}\s+', '', poblacio_line)
                         dni_data.poblacio = poblacio_line.strip()
 
-                    # Tercera línia: província (si no estava entre parèntesis)
-                    if len(adreca_lines) > 2 and not dni_data.provincia:
-                        dni_data.provincia = adreca_lines[2].strip()
+                        # Tercera línia: província (si no estava entre parèntesis)
+                        if len(adreca_lines) > 2 and not dni_data.provincia:
+                            dni_data.provincia = adreca_lines[2].strip()
 
-                    # Adreça completa (només primeres 3 línies màxim)
-                    dni_data.adreca_completa = ', '.join(adreca_lines[:3])
+                    # Adreça completa (només primeres 4 línies màxim)
+                    dni_data.adreca_completa = ', '.join(adreca_lines[:4])
 
             # Buscar lloc de naixement
             elif 'LUGAR' in line.upper() and 'NACIMIENTO' in line.upper() or 'LLOC' in line.upper() and 'NAIXEMENT' in line.upper():
