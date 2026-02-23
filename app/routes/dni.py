@@ -54,6 +54,13 @@ async def process_dni(
     - Phase 1: extracció raw (regex Python)
     - Phase 2: validació creuada + codis normalitzats (Python pur, 0 crèdits)
     """
+    # 🔍 LOG TEMPORAL: Petició rebuda
+    log.info("🔍 DNI REQUEST", extra={
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "preprocess": preprocess,
+    })
+
     if file.content_type not in VALID_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Format no suportat. Acceptem JPG, PNG o WEBP.")
 
@@ -155,6 +162,19 @@ async def process_dni(
             "valido": result.valido,
             "engine": result.raw.ocr_engine,
         })
+
+        # 🔍 LOG TEMPORAL: Resposta enviada
+        log.info("🔍 DNI RESPONSE", extra={
+            "doc_redacted": _redact(result.datos.numero_documento),
+            "domicilio": result.datos.domicilio,
+            "municipio": result.datos.municipio,
+            "provincia": result.datos.provincia,
+            "codigo_postal": result.datos.codigo_postal,
+            "contracte": "v1",
+            "valido": result.valido,
+            "confianza": result.confianza_global,
+        })
+
         return result
 
     except HTTPException:

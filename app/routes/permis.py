@@ -52,6 +52,13 @@ async def process_permis(
     - Phase 1: extracció raw per regex
     - Phase 2: validació creuada + correcció OCR (Python pur, 0 crèdits addicionals)
     """
+    # 🔍 LOG TEMPORAL: Petició rebuda
+    log.info("🔍 PERMIS REQUEST", extra={
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "preprocess": preprocess,
+    })
+
     if file.content_type not in VALID_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Format no suportat. Acceptem JPG, PNG o WEBP.")
 
@@ -151,6 +158,19 @@ async def process_permis(
             "confianza_global": result.confianza_global,
             "engine": result.raw.ocr_engine,
         })
+
+        # 🔍 LOG TEMPORAL: Resposta enviada
+        log.info("🔍 PERMIS RESPONSE", extra={
+            "matricula": result.datos.matricula,
+            "marca": result.datos.marca,
+            "modelo": result.datos.modelo,
+            "tipo_vehiculo": result.datos.tipo_vehiculo,
+            "emissions_co2": result.datos.emissions_co2,
+            "contracte": "v1",
+            "valido": result.valido,
+            "confianza": result.confianza_global,
+        })
+
         return result
 
     except HTTPException:
