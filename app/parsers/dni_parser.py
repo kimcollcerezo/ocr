@@ -238,11 +238,13 @@ class DNIParser:
 
             elif re.search(r"D[O0]MICILI[O0]", lu) or "DOMICILI" in lu:  # Més flexible amb OCR errors
                 # 🔍 LOG: DOMICILIO detectat!
-                log.info("🔍 DNI Parser - DOMICILIO detectat!", extra={
-                    "line_index": i,
-                    "line_content": lines[i],
-                    "next_5_lines": lines[i+1:i+6] if i+1 < len(lines) else [],
-                })
+                print(f"\n🔍 DNI Parser - DOMICILIO detectat!")
+                print(f"  Line index: {i}")
+                print(f"  Line content: '{lines[i]}'")
+                print(f"  Next 5 lines:")
+                for idx, next_line in enumerate(lines[i+1:i+6] if i+1 < len(lines) else []):
+                    print(f"    [{idx}] '{next_line}'")
+                log.info("🔍 DNI Parser - DOMICILIO detectat!")
 
                 # Llegir TOTES les línies d'adreça (fins a 8 línies o keyword)
                 adreca_lines = []
@@ -260,10 +262,10 @@ class DNIParser:
                     adreca_lines.append(nl)
 
                 # 🔍 LOG: Línies d'adreça llegides
-                log.info("🔍 DNI Parser - Línies adreça llegides", extra={
-                    "num_lines": len(adreca_lines),
-                    "adreca_lines": adreca_lines,
-                })
+                print(f"\n🔍 DNI Parser - Línies adreça llegides: {len(adreca_lines)} línies")
+                for idx, line in enumerate(adreca_lines):
+                    print(f"  [{idx}] '{line}'")
+                log.info("🔍 DNI Parser - Línies adreça llegides")
 
                 if adreca_lines:
                     # Províncies espanyoles completes
@@ -314,12 +316,13 @@ class DNIParser:
                         data.municipio = pob.strip() or None
 
                     # 🔍 LOG: Valors finals extrets
-                    log.info("🔍 DNI Parser - Adreça extreta", extra={
-                        "domicilio": data.domicilio,
-                        "codigo_postal": data.codigo_postal,
-                        "municipio": data.municipio,
-                        "provincia": data.provincia,
-                    })
+                    print(f"\n🔍 DNI Parser - Adreça extreta:")
+                    print(f"  domicilio: '{data.domicilio}'")
+                    print(f"  codigo_postal: '{data.codigo_postal}'")
+                    print(f"  municipio: '{data.municipio}'")
+                    print(f"  provincia: '{data.provincia}'")
+                    print(f"{'='*80}\n")
+                    log.info("🔍 DNI Parser - Adreça extreta")
 
             elif ("FECHA" in lu and "NACIMIENTO" in lu) or ("DATA" in lu and "NAIXEMENT" in lu):
                 if i + 1 < len(lines):
@@ -387,12 +390,15 @@ class DNIParser:
         Retorna (DNIDatos, raw_mrz_text | None).
         """
         # 🔍 LOG TEMPORAL: Text OCR complet rebut
-        log.info("🔍 DNI Parser - Text OCR rebut", extra={
-            "text_length": len(text),
-            "text_lines": len(text.split('\n')),
-            "has_domicilio": "DOMICILIO" in text.upper() or "DOMICILI" in text.upper(),
-            "text_preview": text[:800] if len(text) > 800 else text,
-        })
+        print(f"\n{'='*80}")
+        print(f"🔍 DNI Parser - Text OCR rebut")
+        print(f"  Length: {len(text)} chars")
+        print(f"  Lines: {len(text.split('\n'))}")
+        print(f"  Has DOMICILIO: {'DOMICILIO' in text.upper() or 'DOMICILI' in text.upper()}")
+        print(f"  Text preview (primeres 600 chars):")
+        print(f"  {text[:600]}")
+        print(f"{'='*80}\n")
+        log.info("🔍 DNI Parser - Text OCR rebut")
 
         mrz_result = DNIParser.parse_mrz(text)
 
