@@ -78,6 +78,8 @@ def _doc_type(doc: str) -> Optional[str]:
 def _clean_name(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
+    # Eliminar prefixos comuns d'error OCR (bdr, nif, dni, etc.)
+    value = re.sub(r"^(bdr|nif|dni|nie|doc)\s+", "", value, flags=re.IGNORECASE)
     cleaned = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ \-']", "", value)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or None
@@ -234,9 +236,9 @@ class DNIParser:
                         tokens = tokens[1:]
                     data.nombre = " ".join(tokens).strip() or None
 
-            elif "DOMICILIO" in lu or "DOMICILI" in lu:
+            elif re.search(r"D[O0]MICILI[O0]", lu) or "DOMICILI" in lu:  # Més flexible amb OCR errors
                 adreca_lines = []
-                for j in range(i + 1, min(i + 5, len(lines))):
+                for j in range(i + 1, min(i + 6, len(lines))):  # Augmentat a 6 línies
                     nl = lines[j].strip()
                     if nl and not any(kw in nl.upper() for kw in
                                       ["FECHA", "DATA", "LUGAR", "LLOC", "PADRE", "PARE",
@@ -245,25 +247,37 @@ class DNIParser:
                     else:
                         break
                 if adreca_lines:
+                    # Primera línia: carrer i número
                     data.domicilio = adreca_lines[0]
+
+                    # Buscar codi postal (5 dígits) en totes les línies
+                    for line in adreca_lines:
+                        cp_match = re.search(r"\b(\d{5})\b", line)
+                        if cp_match:
+                            data.codigo_postal = cp_match.group(1)
+                            break
+
                     if len(adreca_lines) > 1:
                         # Última línia pot ser província
                         PROVINCIES = [
                             "BARCELONA", "TARRAGONA", "LLEIDA", "GIRONA", "MADRID",
                             "VALENCIA", "ALICANTE", "SEVILLA", "MALAGA", "ZARAGOZA",
-                            "BILBAO", "VIZCAYA", "NAVARRA", "MURCIA",
+                            "BILBAO", "VIZCAYA", "NAVARRA", "MURCIA", "CADIZ", "HUELVA",
+                            "CORDOBA", "JAEN", "GRANADA", "ALMERIA", "CASTELLON",
                         ]
                         last = adreca_lines[-1].upper()
                         if any(p in last for p in PROVINCIES):
                             data.provincia = adreca_lines[-1].strip()
                             if len(adreca_lines) > 2:
                                 pob = adreca_lines[-2]
-                                pob = re.sub(r"^\d{5}\s+", "", pob)
+                                pob = re.sub(r"^\d{5}\s+", "", pob)  # Treure CP si està davant
                                 data.municipio = pob.strip()
                         else:
-                            pob = adreca_lines[1]
-                            pob = re.sub(r"^\d{5}\s+", "", pob)
-                            data.municipio = pob.strip()
+                            # Si no hi ha província, la segona línia és població
+                            if len(adreca_lines) > 1:
+                                pob = adreca_lines[1]
+                                pob = re.sub(r"^\d{5}\s+", "", pob)
+                                data.municipio = pob.strip() or None
 
             elif ("FECHA" in lu and "NACIMIENTO" in lu) or ("DATA" in lu and "NAIXEMENT" in lu):
                 if i + 1 < len(lines):

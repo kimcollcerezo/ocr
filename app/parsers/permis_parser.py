@@ -295,13 +295,27 @@ class PermisParser:
                         if 50 <= val <= 10000:
                             data.cilindrada_cc = val
 
-            # P.2 — Potència (kW)
-            if re.search(r"\bP\.?\s*2\b", lu):
+            # P.2 — Potència (kW) - Variants: P.2, P2, P 2, P. 2
+            if re.search(r"\bP\.?\s*2\b", lu) or re.search(r"\bP\s*\.?\s*2\b", lu):
                 v = PermisParser._next_val(lines, i)
                 if v:
-                    nm = re.match(r"^(\d+\.?\d*)$", v)
+                    # Acceptar formats: "92", "92.0", "92 kW", "92.0 kW"
+                    nm = re.match(r"^(\d+\.?\d*)\s*(kW|KW)?$", v, re.IGNORECASE)
                     if nm:
-                        data.potencia_kw = float(nm.group(1))
+                        val = float(nm.group(1))
+                        if 1 <= val <= 1000:  # Rang plausible kW
+                            data.potencia_kw = val
+
+            # Potència en CV (cavalls de vapor) - Fallback si no hi ha kW
+            if not data.potencia_kw and re.search(r"\b(CV|HP)\b", lu, re.IGNORECASE):
+                v = PermisParser._next_val(lines, i)
+                if v:
+                    nm = re.match(r"^(\d+\.?\d*)\s*(CV|HP)?$", v, re.IGNORECASE)
+                    if nm:
+                        cv = float(nm.group(1))
+                        if 1 <= cv <= 1500:
+                            # Convertir CV a kW (1 CV ≈ 0.7355 kW)
+                            data.potencia_kw = round(cv * 0.7355, 1)
 
             # P.3 — Combustible
             if re.search(r"\bP\.?\s*3\b", lu):
@@ -309,11 +323,12 @@ class PermisParser:
                 if v and re.match(r"^[A-ZÁÉÍÓÚÜ/ ]{3,20}$", v.upper()):
                     data.combustible = v.upper().strip()
 
-            # V.7 — Emissions CO2 (g/km)
-            if re.search(r"\bV\.?\s*7\b", lu):
+            # V.7 — Emissions CO2 (g/km) - Variants: V.7, V7, V 7, V. 7
+            if re.search(r"\bV\.?\s*7\b", lu) or re.search(r"\bV\s*\.?\s*7\b", lu):
                 v = PermisParser._next_val(lines, i)
                 if v:
-                    nm = re.match(r"^(\d+\.?\d*)$", v)
+                    # Acceptar formats: "120", "120.5", "120 g/km"
+                    nm = re.match(r"^(\d+\.?\d*)\s*(g/km|g\/km)?$", v, re.IGNORECASE)
                     if nm:
                         val = float(nm.group(1))
                         if 0 <= val <= 999:
