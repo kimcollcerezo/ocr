@@ -54,9 +54,9 @@ async def process_permis(
     """
     # 🔍 LOG TEMPORAL: Petició rebuda
     log.info("🔍 PERMIS REQUEST", extra={
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "preprocess": preprocess,
+        "uploaded_filename": file.filename,
+        "mime_type": file.content_type,
+        "preprocess_enabled": preprocess,
     })
 
     if file.content_type not in VALID_MIME_TYPES:
