@@ -610,7 +610,7 @@ class DNIParser:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def should_fallback_to_vision(data: DNIDatos, tess_confidence: float) -> tuple[bool, str]:
+    def should_fallback_to_vision(data: DNIDatos, tess_confidence: float, text: str = "") -> tuple[bool, str]:
         """
         Decideix si cal Vision. Treballa sobre DNIDatos de Phase 1.
         """
@@ -620,6 +620,16 @@ class DNIParser:
             return True, "nom_absent"
         if not data.apellidos:
             return True, "apellidos_absents"
+
+        # Si el text sembla un posterior (conté keywords) però no té adreça, fer fallback
+        text_upper = text.upper()
+        posterior_keywords = ["DOMICILIO", "DOMICILI", "EQUIPO", "EQUIP", "HIJO", "FILL", "PADRE", "PARE", "MADRE", "MARE", "LUGAR DE NACIMIENTO"]
+        sembla_posterior = any(kw in text_upper for kw in posterior_keywords)
+        no_te_adreca = not data.domicilio and not data.municipio and not data.provincia
+
+        if sembla_posterior and no_te_adreca and tess_confidence < 70:
+            return True, "posterior_sense_adreca"
+
         # Estimació de qualitat ràpida: comptar camps principals
         principals = [data.numero_documento, data.nombre, data.apellidos,
                       data.fecha_nacimiento, data.fecha_caducidad]

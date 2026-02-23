@@ -94,10 +94,11 @@ async def process_dni(
                         timeout=OCR_TIMEOUT_SECONDS,
                     )
                 tess_ms = round((time.monotonic() - t0) * 1000)
-                tess_data, raw_mrz = dni_parser.parse(tess_result["text"])
+                tess_text = tess_result["text"]
+                tess_data, raw_mrz = dni_parser.parse(tess_text)
                 tess_confidence = tess_result["confidence"]
 
-                cal_fallback, motiu = dni_parser.should_fallback_to_vision(tess_data, tess_confidence)
+                cal_fallback, motiu = dni_parser.should_fallback_to_vision(tess_data, tess_confidence, tess_text)
 
                 if not cal_fallback:
                     result = dni_parser.validate_and_build_response(
