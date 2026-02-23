@@ -246,20 +246,40 @@ class DNIParser:
                     print(f"    [{idx}] '{next_line}'")
                 log.info("🔍 DNI Parser - DOMICILIO detectat!")
 
-                # Llegir TOTES les línies d'adreça (fins a 8 línies o keyword)
+                # Comprovar si l'adreça està a la MATEIXA línia (després de DOMICILIO/DOMICILI)
+                same_line_match = re.search(r"D[O0]MICILI[O0]/D[O0]MICILI\s+(.+)$", lines[i], re.IGNORECASE)
+                if not same_line_match:
+                    same_line_match = re.search(r"D[O0]MICILI[O0]\s+(.+)$", lines[i], re.IGNORECASE)
+                if not same_line_match:
+                    same_line_match = re.search(r"DOMICILI\s+(.+)$", lines[i], re.IGNORECASE)
+
                 adreca_lines = []
-                for j in range(i + 1, min(i + 9, len(lines))):
-                    nl = lines[j].strip()
-                    # Aturar si línia buida
-                    if not nl:
-                        break
-                    # Aturar si trobem keywords NO relacionades amb adreça
-                    if any(kw in nl.upper() for kw in
-                           ["FECHA", "DATA", "LUGAR", "LLOC", "PADRE", "PARE",
-                            "MADRE", "MARE", "EQUIPO", "EQUIP", "HIJO", "FILL",
-                            "IDNUM", "TEAM"]):
-                        break
-                    adreca_lines.append(nl)
+
+                if same_line_match:
+                    # Adreça a la mateixa línia! Dividir per espais múltiples o números de 5 dígits
+                    rest_of_line = same_line_match.group(1).strip()
+                    print(f"  ⚡ Adreça a la mateixa línia: '{rest_of_line}'")
+
+                    # Intentar dividir per CP (5 dígits) o províncies
+                    parts = re.split(r'(\d{5})', rest_of_line)
+                    for part in parts:
+                        part = part.strip()
+                        if part:
+                            adreca_lines.append(part)
+                else:
+                    # Llegir línies següents (comportament original)
+                    for j in range(i + 1, min(i + 9, len(lines))):
+                        nl = lines[j].strip()
+                        # Aturar si línia buida
+                        if not nl:
+                            break
+                        # Aturar si trobem keywords NO relacionades amb adreça
+                        if any(kw in nl.upper() for kw in
+                               ["FECHA", "DATA", "LUGAR", "LLOC", "PADRE", "PARE",
+                                "MADRE", "MARE", "EQUIPO", "EQUIP", "HIJO", "FILL",
+                                "IDNUM", "TEAM"]):
+                            break
+                        adreca_lines.append(nl)
 
                 # 🔍 LOG: Línies d'adreça llegides
                 print(f"\n🔍 DNI Parser - Línies adreça llegides: {len(adreca_lines)} línies")
@@ -390,14 +410,17 @@ class DNIParser:
         Retorna (DNIDatos, raw_mrz_text | None).
         """
         # 🔍 LOG TEMPORAL: Text OCR complet rebut
-        print(f"\n{'='*80}")
-        print(f"🔍 DNI Parser - Text OCR rebut")
+        lines_count = len(text.split('\n'))
+        has_dom = 'DOMICILIO' in text.upper() or 'DOMICILI' in text.upper()
+        separator = '=' * 80
+        print(f"\n{separator}")
+        print("🔍 DNI Parser - Text OCR rebut")
         print(f"  Length: {len(text)} chars")
-        print(f"  Lines: {len(text.split('\n'))}")
-        print(f"  Has DOMICILIO: {'DOMICILIO' in text.upper() or 'DOMICILI' in text.upper()}")
-        print(f"  Text preview (primeres 600 chars):")
+        print(f"  Lines: {lines_count}")
+        print(f"  Has DOMICILIO: {has_dom}")
+        print("  Text preview (primeres 600 chars):")
         print(f"  {text[:600]}")
-        print(f"{'='*80}\n")
+        print(f"{separator}\n")
         log.info("🔍 DNI Parser - Text OCR rebut")
 
         mrz_result = DNIParser.parse_mrz(text)
