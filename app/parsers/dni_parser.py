@@ -384,6 +384,15 @@ class DNIParser:
         Parse principal: MRZ primer, complementat amb full_text.
         Retorna (DNIDatos, raw_mrz_text | None).
         """
+        # 🔍 LOG TEMPORAL: Text OCR complet per debug
+        has_domicilio = "DOMICILIO" in text.upper() or "DOMICILI" in text.upper()
+        if has_domicilio:
+            log.info("🔍 POSTERIOR OCR TEXT", extra={
+                "text_length": len(text),
+                "lines_count": len(text.split('\n')),
+                "text_preview": text[:800] if len(text) <= 800 else text[:800] + "...",
+            })
+
         mrz_result = DNIParser.parse_mrz(text)
 
         if mrz_result:
