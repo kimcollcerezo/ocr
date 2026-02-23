@@ -1,453 +1,276 @@
-# Agent OCR - Document Processing API
+# Agent OCR — Document Processing API
 
-API REST per processar documents espanyols (DNI i Permís de Circulació) utilitzant OCR amb Google Cloud Vision i Tesseract.
+API REST per processar documents espanyols (DNI/NIE i Permís de Circulació) amb OCR expert i validació automàtica.
+
+**Versió**: Contracte unificat v1 · **Desplegament**: Railway
+
+---
 
 ## Característiques
 
-- **OCR d'alta precisió** amb Google Cloud Vision API (95% confidence)
-- **Processament d'imatges** amb OpenCV (8 tècniques de preprocessament)
-- **Parsers especialitzats** per DNI i Permís de Circulació
-- **API REST** amb FastAPI i documentació automàtica (Swagger)
-- **Autenticació amb API Key** per protegir l'accés
-- **Múltiples modes** de preprocessament: standard, aggressive, document
-- **Stateless** - No requereix base de dades
-- **Desplegat a producció** a Railway: https://ocr-production-abec.up.railway.app
+- **Tesseract-first + Google Vision fallback** — 1 sol crèdit Vision per document
+- **Validació expert automàtica** — check digit DNI/NIE, format matrícula, VIN, NIF titular
+- **Resposta unificada** (`valido`, `confianza_global`, `ValidationItem`) per tots els documents
+- **Dates ISO 8601** (`YYYY-MM-DD`) a tots els camps
+- **JSON structured logging** amb latència i motor OCR usat
+- **PII redactat** als logs (DNI: `7761****T`)
+- **131 tests unitaris** (DNI parser + model + Permís parser)
+- **Stateless** — cap base de dades, les imatges s'eliminen immediatament
 
 ## Documents suportats
 
-### DNI Espanyol (Frontal i Posterior)
-Extreu:
-- DNI, nom complet, cognoms
-- Data de naixement, data de caducitat
-- Sexe, nacionalitat
-- **Adreça completa**: carrer, número, població, província
-- Lloc de naixement
-- Pare, mare
+| Document | Camps extrets | Motors |
+|----------|---------------|--------|
+| DNI espanyol (frontal) | número, nom, cognoms, sexe, nacionalitat, dates | Tesseract + Vision |
+| DNI espanyol (posterior) | domicili, lloc de naixement, pare/mare, MRZ | Tesseract + Vision |
+| NIE (X/Y/Z) | identificació NIE, mateixos camps que DNI | Tesseract + Vision |
+| Permís de Circulació | matrícula, VIN, marca, model, potència, titular, ITV... | Vision (Tesseract fallback rar) |
 
-### Permís de Circulació
-Extreu:
-- Matrícula
-- Marca i model
-- Cilindrada
-- Número de bastidor
-- Data de matriculació
-- Titular
+## Arquitectura de cost
 
-## Resultats de precisió
+```
+Imatge
+  │
+  ▼
+Tesseract (gratuït)
+  ├─ OK (confiança ≥ 50, camps mínims vàlids) ──► Retorna resultat
+  └─ Fallback ──► Google Vision (1 crèdit) ──► Validació Python ──► Retorna resultat
+```
 
-### Google Cloud Vision (Recomanat per producció)
-- **Precisió**: 95% confidence
-- **DNI**: 11/11 camps extrets correctament
-- **Permís**: 7/7 camps extrets correctament
-- **Ideal per**: Tots els documents
+**Garantia**: Cap document consumeix més d'1 crèdit Vision.
+La validació creuada (Phase 2) és Python pur, sense crides externes.
 
-### Tesseract (PSM 6)
-- **Precisió**: 66% confidence
-- **DNI**: 6/11 camps (només MRZ, sense adreça ni dades familiars)
-- **Permís**: Resultats inconsistents
-- **Ideal per**: Testing/desenvolupament local
+---
 
-## Requisits
-
-- Python 3.10+
-- Tesseract OCR (opcional, per desenvolupament)
-- **Google Cloud Vision API** (credencials obligatòries per producció)
-- OpenCV
-
-## Instal·lació
-
-### 1. Clonar repositori
+## Instal·lació (desenvolupament local)
 
 ```bash
+# 1. Clonar i entrar
 git clone <repository-url>
 cd OCR
-```
 
-### 2. Crear entorn virtual
-
-```bash
+# 2. Entorn virtual
 python3 -m venv venv
 source venv/bin/activate  # macOS/Linux
-# o
-venv\Scripts\activate  # Windows
-```
 
-### 3. Instal·lar dependències
-
-```bash
+# 3. Dependències
 pip install -r requirements.txt
-```
 
-### 4. Instal·lar Tesseract (opcional)
+# 4. Tesseract (opcional)
+brew install tesseract tesseract-lang  # macOS
+# apt-get install tesseract-ocr tesseract-ocr-spa  # Ubuntu
 
-**macOS:**
-```bash
-brew install tesseract tesseract-lang
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install tesseract-ocr tesseract-ocr-spa tesseract-ocr-cat
-```
-
-**Windows:**
-Descarregar i instal·lar des de: https://github.com/UB-Mannheim/tesseract/wiki
-
-### 5. Configurar variables d'entorn
-
-Copiar `.env.example` a `.env` i configurar:
-
-```bash
+# 5. Variables d'entorn
 cp .env.example .env
-```
+# Editar .env amb les credencials Google Cloud Vision
 
-Editar `.env` amb les teves credencials de Google Cloud Vision (OBLIGATORI).
-
-## Ús
-
-### Iniciar servidor
-
-```bash
-source venv/bin/activate
+# 6. Iniciar servidor
 uvicorn app.main:app --reload --port 8000
 ```
 
-El servidor estarà disponible a: http://localhost:8000
+---
 
-### Documentació API interactiva
+## Ús ràpid
 
-⚠️ **Nota**: Els endpoints de documentació requereixen API Key en producció
-
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-
-Per accedir a la documentació en producció, afegeix el header `X-API-Key`
-
-### Exemples d'ús
-
-#### 1. Health Check
+### Health check
 
 ```bash
 curl http://localhost:8000/health
 ```
 
-**Resposta:**
 ```json
-{
-  "status": "healthy",
-  "services": {
-    "tesseract": true,
-    "google_vision": true
-  }
-}
+{"status": "healthy", "services": {"tesseract": true, "google_vision": true}}
 ```
 
-#### 2. Processar DNI
+### Processar DNI
 
 ```bash
 curl -X POST "http://localhost:8000/ocr/dni" \
-  -H "X-API-Key: your-api-key-here" \
-  -F "file=@dni_frontal.jpg" \
-  -F "preprocess=true" \
-  -F "preprocess_mode=standard"
+  -F "file=@dni_frontal.jpg"
 ```
 
-**Resposta:**
+**Resposta (contracte v1)**:
+
 ```json
 {
-  "success": true,
-  "message": "DNI processat correctament",
-  "data": {
-    "dni": "77612097T",
-    "nom": "JOAQUIN",
-    "cognoms": "COLL CEREZO",
-    "nom_complet": "JOAQUIN COLL CEREZO",
-    "data_naixement": "24/01/1973",
-    "data_caducitat": "28/08/2028",
-    "sexe": "Home",
-    "nacionalitat": "ESP",
-    "carrer": "CARRER VENDRELL",
-    "numero": "5",
-    "poblacio": "CABRILS",
-    "provincia": "BARCELONA",
-    "adreca_completa": "CARRER VENDRELL 5, CABRILS, BARCELONA",
-    "lloc_naixement": "BARCELONA",
-    "pare": "COLL BATLLE RAMON",
-    "mare": "CEREZO MARTINEZ MARIA ISABEL",
-    "confidence": 95.0,
-    "ocr_engine": "google_vision"
-  }
+  "valido": true,
+  "confianza_global": 99,
+  "tipo_documento": "dni",
+  "datos": {
+    "numero_documento": "77612097T",
+    "tipo_numero": "DNI",
+    "nombre": "JOAQUIN",
+    "apellidos": "COLL CEREZO",
+    "nombre_completo": "JOAQUIN COLL CEREZO",
+    "sexo": "M",
+    "nacionalidad": "ESP",
+    "fecha_nacimiento": "1973-01-24",
+    "fecha_caducidad": "2028-08-28"
+  },
+  "alertas": [],
+  "errores_detectados": [],
+  "raw": {"ocr_engine": "google_vision", "ocr_confidence": 95.0},
+  "meta": {"success": true, "message": "Document processat correctament"}
 }
 ```
 
-#### 3. Processar Permís de Circulació
+### Processar Permís de Circulació
 
 ```bash
 curl -X POST "http://localhost:8000/ocr/permis" \
-  -H "X-API-Key: your-api-key-here" \
   -F "file=@permis.jpg"
 ```
 
-**Resposta:**
+**Resposta (contracte v1)**:
+
 ```json
 {
-  "success": true,
-  "message": "Permís processat correctament",
-  "data": {
+  "valido": true,
+  "confianza_global": 99,
+  "tipo_documento": "permiso_circulacion",
+  "datos": {
     "matricula": "1177MTM",
+    "numero_bastidor": "YARKAAC3100018794",
     "marca": "TOYOTA",
-    "model": "YARIS",
-    "cilindrada": "1490",
-    "bastidor": "YARKAAC3100018794",
-    "data_matriculacio": "08/08/2024",
-    "titular": "COLL CEREZO JOAQUIN",
-    "confidence": 95.0,
-    "ocr_engine": "google_vision"
-  }
+    "modelo": "TOYOTA YARIS",
+    "categoria": "M1",
+    "fecha_matriculacion": "2024-08-08",
+    "titular_nombre": "JOAQUIN COLL CEREZO",
+    "cilindrada_cc": 1490,
+    "potencia_kw": 92.0,
+    "potencia_fiscal": 125.1,
+    "combustible": "GASOLINA",
+    "plazas": 5,
+    "proxima_itv": "2028-08-08"
+  },
+  "alertas": [],
+  "errores_detectados": [],
+  "raw": {"ocr_engine": "google_vision", "ocr_confidence": 95.0},
+  "meta": {"success": true, "message": "Permís processat correctament"}
 }
 ```
 
-## Modes de preprocessament
-
-| Mode | Tècniques aplicades | Ús recomanat |
-|------|-------------------|--------------|
-| **none** | Cap preprocessament | Imatges d'alta qualitat |
-| **standard** | Rotació + Contrast (CLAHE) | **Ús general (recomanat)** |
-| **aggressive** | Rotació + Denoise + Contrast + Sharpen | Imatges de baixa qualitat |
-| **document** | Detecció de límits + Perspectiva + Rotació | Documents inclinats o amb perspectiva |
-
-## Tècniques de preprocessament (OpenCV)
-
-1. **Detecció i correcció de rotació** - Hough Transform per detectar línies i calcular angle
-2. **Millora de contrast** - CLAHE (Contrast Limited Adaptive Histogram Equalization)
-3. **Eliminació de soroll** - fastNlMeansDenoisingColored
-4. **Binarització adaptativa** - Adaptive Threshold amb Gaussian
-5. **Millora de nitidesa** - Sharpening kernel convolucional
-6. **Redimensionament intel·ligent** - Resize màx. 2000px amb LANCZOS4
-7. **Detecció de límits del document** - Canny Edge Detection + Contour detection
-8. **Transformació de perspectiva** - Perspective Transform per enderreçar
-
-Més detalls: [docs/IMAGE_PROCESSING.md](docs/IMAGE_PROCESSING.md)
-
-## Exemples d'integració
-
-### Des de JavaScript/TypeScript (Next.js, React, Node.js)
-
-```javascript
-async function processarDNI(file) {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('preprocess', 'true');
-  formData.append('preprocess_mode', 'standard');
-
-  const response = await fetch('https://ocr-production-abec.up.railway.app/ocr/dni', {
-    method: 'POST',
-    headers: {
-      'X-API-Key': 'your-api-key-here'
-    },
-    body: formData
-  });
-
-  const result = await response.json();
-
-  if (result.success) {
-    console.log('DNI:', result.data.dni);
-    console.log('Nom:', result.data.nom_complet);
-    console.log('Adreça:', result.data.adreca_completa);
-  }
-
-  return result.data;
-}
-```
-
-### Des de PHP (Laravel)
-
-```php
-use Illuminate\Support\Facades\Http;
-
-$response = Http::withHeaders([
-    'X-API-Key' => env('OCR_AGENT_API_KEY')
-])->attach(
-    'file',
-    file_get_contents($filePath),
-    'dni.jpg'
-)->post(env('OCR_AGENT_URL') . '/ocr/dni', [
-    'preprocess' => true,
-    'preprocess_mode' => 'standard'
-]);
-
-$dniData = $response->json()['data'];
-```
-
-### Des de Python
-
-```python
-import requests
-import os
-
-headers = {
-    'X-API-Key': os.getenv('OCR_AGENT_API_KEY')
-}
-
-with open('dni.jpg', 'rb') as f:
-    response = requests.post(
-        os.getenv('OCR_AGENT_URL') + '/ocr/dni',
-        headers=headers,
-        files={'file': f},
-        data={'preprocess': 'true', 'preprocess_mode': 'standard'}
-    )
-
-if response.json()['success']:
-    dni_data = response.json()['data']
-    print(f"DNI: {dni_data['dni']}")
-    print(f"Nom: {dni_data['nom_complet']}")
-```
+---
 
 ## Estructura del projecte
 
 ```
 OCR/
 ├── app/
-│   ├── main.py                 # FastAPI app principal
-│   ├── config.py               # Configuració i variables d'entorn
-│   ├── models/                 # Models Pydantic
-│   │   ├── dni_response.py
-│   │   └── permis_response.py
-│   ├── services/               # Serveis OCR i processament
-│   │   ├── tesseract_service.py
-│   │   ├── google_vision_service.py
-│   │   └── image_processor.py
-│   ├── parsers/                # Parsers de documents
-│   │   ├── dni_parser.py
-│   │   └── permis_parser.py
-│   └── routes/                 # Endpoints API
-│       ├── dni.py
-│       └── permis.py
-├── docs/                       # Documentació
-│   ├── API.md
+│   ├── main.py                  # FastAPI app + JSON logging + middleware
+│   ├── config.py                # Variables d'entorn
+│   ├── models/
+│   │   ├── base_response.py     # ValidationItem, RawOCR, MetaInfo, compute_confianza()
+│   │   ├── dni_response.py      # DNIDatos, DNIValidationResponse
+│   │   └── permis_response.py   # PermisExtracted, PermisValidationResponse
+│   ├── parsers/
+│   │   ├── dni_parser.py        # MRZ + full-text, check digit, NIE
+│   │   └── permis_parser.py     # EU field codes, VIN, matrícula, NIF
+│   ├── routes/
+│   │   ├── dni.py               # POST /ocr/dni
+│   │   └── permis.py            # POST /ocr/permis
+│   └── services/
+│       ├── tesseract_service.py
+│       ├── google_vision_service.py
+│       └── image_processor.py   # OpenCV: rotació, CLAHE, denoise, perspectiva
+├── tests/
+│   ├── test_dni_parser.py       # 44 tests parser DNI
+│   ├── test_dni_model.py        # 11 tests model DNI
+│   └── test_permis_parser.py    # 76 tests parser Permís
+├── docs/
+│   ├── API.md                   # Documentació completa contracte v1
+│   ├── GOGESTOR_INTEGRATION.md  # Integració PHP/Laravel
 │   ├── DEPLOYMENT.md
 │   ├── DEVELOPMENT.md
-│   ├── IMAGE_PROCESSING.md
-│   └── OCR_COMPARISON.md
-├── tests/                      # Tests
-├── Dockerfile                  # Docker per desplegament
-├── docker-compose.yml          # Docker Compose per local
-├── requirements.txt            # Dependències Python
-├── .env.example               # Exemple de configuració
-├── .gitignore                 # Fitxers ignorats per Git
-└── README.md                  # Aquesta documentació
+│   └── IMAGE_PROCESSING.md
+├── ROADMAP.md
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
 ```
+
+---
+
+## Tests
+
+```bash
+source venv/bin/activate
+pytest tests/ -v
+# 131 passed
+```
+
+---
+
+## Modes de preprocessament
+
+| Mode | Ús | Velocitat |
+|------|-----|-----------|
+| `standard` (default) | Ús general — rotació + CLAHE | Ràpid |
+| `aggressive` | Imatges fosques o de baixa qualitat | Moderat |
+| `document` | Documents inclinats, perspectiva | Lent |
+
+```bash
+curl -X POST "http://localhost:8000/ocr/dni" \
+  -F "file=@dni.jpg" \
+  -F "preprocess=true" \
+  -F "preprocess_mode=aggressive"
+```
+
+---
 
 ## Desplegament
 
-### Railway (Recomanat)
-
-Consulta la guia completa: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+### Railway (producció)
 
 ```bash
-# 1. Crear projecte a railway.app
-# 2. Connectar repositori GitHub
-# 3. Railway auto-detecta el Dockerfile
-# 4. Configurar variables d'entorn al dashboard:
-#    - GOOGLE_CLOUD_CREDENTIALS_JSON
-#    - TESSERACT_ENABLED
-#    - TESSERACT_LANG
-# 5. Deploy automàtic
+# Railway auto-detecta el Dockerfile
+# Variables d'entorn a configurar:
+#   GOOGLE_CLOUD_CREDENTIALS_JSON  (obligatori)
+#   TESSERACT_ENABLED=true
 ```
 
 ### Docker local
 
 ```bash
-# Build
 docker build -t ocr-agent .
-
-# Run
 docker run -p 8000:8000 \
   -e GOOGLE_CLOUD_CREDENTIALS_JSON='{"type":"service_account",...}' \
   ocr-agent
 ```
 
-### Docker Compose
-
-```bash
-docker-compose up -d
-```
-
-## Desenvolupament
-
-Consulta [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) per configurar l'entorn de desenvolupament.
-
-## Documentació completa
-
-- **[API.md](docs/API.md)** - Documentació completa de l'API REST
-- **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Guia de desplegament a Railway
-- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Guia per desenvolupadors
-- **[IMAGE_PROCESSING.md](docs/IMAGE_PROCESSING.md)** - Tècniques de preprocessament
-- **[OCR_COMPARISON.md](docs/OCR_COMPARISON.md)** - Comparació de motors OCR
+---
 
 ## Costos estimats
 
-### Google Cloud Vision
-- **Tier gratuït**: 1.000 unitats/mes ✅
-- **Després del tier gratuït**: $1.50 per 1.000 unitats
-- **Estimació per ús moderat**: ~$5-10/mes
+| Servei | Cost |
+|--------|------|
+| Google Vision (tier gratuït) | Primers 1.000 docs/mes gratuïts |
+| Google Vision (pagament) | $1.50 / 1.000 docs |
+| Tesseract | Gratuït (local) |
+| Railway Hobby Plan | $5/mes |
+| **Total estimat** | **~$5-10/mes** per ús moderat |
 
-### Railway (Hosting)
-- **Hobby Plan**: $5/mes
-- Inclou: 500 hores d'execució, desplegaments il·limitats
+---
 
-**Total estimat**: ~$10-15/mes per producció
+## Documentació
 
-## Seguretat
+- **[docs/API.md](docs/API.md)** — Contracte v1 complet, tots els camps, catàleg d'errors, exemples JS/TS/Python/PHP
+- **[docs/GOGESTOR_INTEGRATION.md](docs/GOGESTOR_INTEGRATION.md)** — Integració PHP/Laravel per a GoGestor
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — Guia Railway + Docker
+- **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** — Entorn de desenvolupament
+- **[ROADMAP.md](ROADMAP.md)** — Estat actual i pròxims passos
 
-- **Autenticació amb API Key** - Tots els endpoints protegits amb `X-API-Key` header
-- Les credencials de Google Cloud Vision es guarden com a variable d'entorn
-- **No es guarden imatges** - Tot el processament és en memòria
-- Les imatges temporals s'eliminen automàticament després del processament
-- CORS configurat per seguretat
-- Servei completament stateless (sense base de dades)
-- GitHub repository privat per protegir el codi
+**Swagger UI interactiu**: http://localhost:8000/docs
 
-## Tecnologies utilitzades
+---
 
-- **FastAPI** - Framework web modern i ràpid per Python
-- **Google Cloud Vision API** - OCR avançat amb IA
-- **Tesseract OCR** - Motor OCR open-source
-- **OpenCV** - Processament d'imatges (cv2)
-- **Pillow (PIL)** - Manipulació d'imatges
-- **NumPy & SciPy** - Càlculs científics i processament de matrius
-- **Pydantic** - Validació de dades i models
-- **Uvicorn** - Servidor ASGI
-- **Docker** - Containerització
+## Seguretat i RGPD
 
-## Roadmap
+- Les imatges s'eliminen immediatament després del processament (fitxers temporals)
+- Els logs no contenen dades personals (DNI, noms) — redactats al route layer
+- CORS configurat (tots els orígens en dev, limitar en producció)
+- Credencials Google Cloud com a variable d'entorn (mai al codi)
 
-- [x] Autenticació amb API keys ✅
-- [ ] **Sistema de tracking d'ús per projecte** (Alta prioritat)
-- [ ] **Suport per més documents**: Passaport, Permís de conduir, NIE
-- [ ] Comparació d'engines OCR (Tesseract vs Google Vision)
-- [ ] Dashboard d'estadístiques i mètriques amb costos
-- [ ] Cache de resultats per optimitzar costos
-- [ ] Detecció automàtica del tipus de document
-- [ ] Rate limiting avançat per projecte
-- [ ] Webhooks per processos asíncrons
-- [ ] Suport multi-idioma (actualment CAT/SPA/ENG)
+---
 
-📋 **Veure roadmap complet**: [ROADMAP.md](./ROADMAP.md)
-
-## Llicència
-
-© 2026 Kim Coll - Tots els drets reservats
-
-## Autor
-
-**Kim Coll**
-Desenvolupador Independent
-GoGestor
-
-## Contacte
-
-Per dubtes, suggeriments o col·laboracions:
-- Email: kim@conekta.cat
-- GitHub: Issues al repositori
-# ocr
+© 2026 Kim Coll · kim@conekta.cat

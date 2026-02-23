@@ -3,11 +3,43 @@ OCR Agent - API FastAPI
 
 Agent independent per OCR de documents (DNI, Permís de Circulació, etc.)
 """
+import time
+import logging
+import json
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
 from app.routes import dni, permis
+
+
+class _JsonFormatter(logging.Formatter):
+    """Format JSON per logs estructurats (compatible amb Datadog, Loki, etc.)"""
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        # Afegir camps extra (mètriques, context)
+        for key, val in record.__dict__.items():
+            if key not in logging.LogRecord.__dict__ and not key.startswith("_"):
+                payload[key] = val
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    root = logging.getLogger("ocr")
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
+    root.propagate = False
+
+
+_configure_logging()
+log = logging.getLogger("ocr.request")
 # from app.routes import compare  # TODO: Implementar més endavant
 
 # Crear app
@@ -27,6 +59,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Middleware de latència i logging de peticions
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Registra mètrica de latència per a cada petició."""
+    t0 = time.monotonic()
+    response = await call_next(request)
+    durada_ms = round((time.monotonic() - t0) * 1000)
+    log.info(
+        "http_request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "durada_ms": durada_ms,
+        }
+    )
+    return response
 
 
 # Middleware de validació d'API Key

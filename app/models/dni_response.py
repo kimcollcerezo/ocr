@@ -1,49 +1,67 @@
 """
-Models de resposta per DNI
+Model de resposta per DNI/NIE — Contracte unificat v1
 """
 from pydantic import BaseModel
-from typing import Optional
-from datetime import date
+from typing import Optional, Literal, List
+from app.models.base_response import ValidationItem, RawOCR, MetaInfo
 
 
-class DNIData(BaseModel):
-    """Dades extretes d'un DNI"""
+class MRZData(BaseModel):
+    """Dades extretes de la zona MRZ (Machine Readable Zone)."""
+    raw: Optional[str] = None              # 3 línies raw per auditoria
+    document_number: Optional[str] = None
+    surname: Optional[str] = None
+    name: Optional[str] = None
+    nationality: Optional[str] = None
+    birth_date: Optional[str] = None       # YYMMDD (format MRZ original)
+    expiry_date: Optional[str] = None      # YYMMDD (format MRZ original)
+    sex: Optional[str] = None             # M | F | < | null
 
-    # Dades personals
-    dni: Optional[str] = None
-    nom: Optional[str] = None
-    cognoms: Optional[str] = None
-    nom_complet: Optional[str] = None
 
-    # Dates
-    data_naixement: Optional[str] = None  # Format: DD/MM/YYYY
-    data_caducitat: Optional[str] = None
+class DNIDatos(BaseModel):
+    """Dades extretes d'un DNI/NIE. Dates en format ISO (YYYY-MM-DD)."""
 
-    # Altres
-    nacionalitat: Optional[str] = None
-    sexe: Optional[str] = None
+    # Identificació
+    numero_documento: Optional[str] = None
+    tipo_numero: Optional[Literal["DNI", "NIE"]] = None
 
-    # Adreça (part posterior)
-    carrer: Optional[str] = None
-    numero: Optional[str] = None
-    poblacio: Optional[str] = None
+    # Persona
+    nombre: Optional[str] = None
+    apellidos: Optional[str] = None
+    nombre_completo: Optional[str] = None
+    sexo: Optional[Literal["M", "F", "X"]] = None
+    nacionalidad: Optional[str] = None
+
+    # Dates (ISO YYYY-MM-DD)
+    fecha_nacimiento: Optional[str] = None
+    fecha_expedicion: Optional[str] = None
+    fecha_caducidad: Optional[str] = None
+
+    # Domicili (part posterior)
+    domicilio: Optional[str] = None
+    municipio: Optional[str] = None
     provincia: Optional[str] = None
-    adreca_completa: Optional[str] = None
+    codigo_postal: Optional[str] = None
 
     # Filiació
-    pare: Optional[str] = None
-    mare: Optional[str] = None
-    lloc_naixement: Optional[str] = None
+    nombre_padre: Optional[str] = None
+    nombre_madre: Optional[str] = None
+    lugar_nacimiento: Optional[str] = None
 
-    # Metadades
-    confidence: Optional[float] = None
-    ocr_engine: Optional[str] = None  # "tesseract" o "google_vision"
+    # Número de suport (rere del document)
+    soporte_numero: Optional[str] = None
+
+    # MRZ (per coherència creuada)
+    mrz: Optional[MRZData] = None
 
 
-class DNIResponse(BaseModel):
-    """Resposta de l'endpoint /ocr/dni"""
-
-    success: bool
-    message: Optional[str] = None
-    data: Optional[DNIData] = None
-    error: Optional[str] = None
+class DNIValidationResponse(BaseModel):
+    """Resposta de l'endpoint /ocr/dni — Contracte unificat v1."""
+    valido: bool
+    confianza_global: int                                    # 0-100
+    tipo_documento: Literal["dni"] = "dni"
+    datos: DNIDatos
+    alertas: List[ValidationItem] = []
+    errores_detectados: List[ValidationItem] = []
+    raw: RawOCR
+    meta: Optional[MetaInfo] = None

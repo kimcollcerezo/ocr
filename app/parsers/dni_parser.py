@@ -1,326 +1,555 @@
 """
-Parser per extreure dades del DNI
+Parser expert per DNI/NIE espanyol — Contracte unificat v1
+
+Phase 1 — parse():          extracció raw del text OCR
+Phase 2 — validate_and_build_response(): validació + codis normalitzats
+
+COST: 1 sol crèdit Vision per document. Phase 1 i 2 son Python pur.
+TODO (futur): si confianza_global < 85 → Claude text-only per refinament
 """
 import re
-from app.models.dni_response import DNIData
+import logging
+from datetime import date
 from typing import Optional
+from app.models.dni_response import DNIDatos, MRZData, DNIValidationResponse
+from app.models.base_response import ValidationItem, RawOCR, MetaInfo, compute_confianza
 
+log = logging.getLogger("ocr.parser")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
+
+# Camps mínims DNI (per calcular absents i decidir valido)
+_CAMPS_MINIMS = ["numero_documento", "nombre", "apellidos", "fecha_nacimiento"]
+
+
+# ---------------------------------------------------------------------------
+# Helpers de data
+# ---------------------------------------------------------------------------
+
+def _dmy_to_iso(date_str: str) -> Optional[str]:
+    """DD/MM/YYYY → YYYY-MM-DD. Retorna None si format o rang invàlid."""
+    m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", date_str)
+    if not m:
+        return None
+    dd, mm, yyyy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1 <= mm <= 12 and 1 <= dd <= 31):
+        return None
+    return f"{yyyy}-{mm:02d}-{dd:02d}"
+
+
+def _validate_dmy(date_str: str, min_year: int, max_year: int) -> Optional[str]:
+    """Valida DD/MM/YYYY en rang i retorna ISO, o None si invàlid."""
+    iso = _dmy_to_iso(date_str)
+    if not iso:
+        return None
+    yyyy = int(iso[:4])
+    if not (min_year <= yyyy <= max_year):
+        return None
+    return iso
+
+
+# ---------------------------------------------------------------------------
+# Helpers de validació documental
+# ---------------------------------------------------------------------------
+
+def validate_doc_number(doc: str) -> bool:
+    """Valida DNI (8d+lletra) o NIE (X/Y/Z+7d+lletra) amb lletra control."""
+    doc = doc.upper().strip()
+    if re.match(r"^\d{8}[A-Z]$", doc):
+        return doc[-1] == DNI_LETTERS[int(doc[:8]) % 23]
+    if re.match(r"^[XYZ]\d{7}[A-Z]$", doc):
+        prefix = {"X": "0", "Y": "1", "Z": "2"}[doc[0]]
+        return doc[-1] == DNI_LETTERS[int(prefix + doc[1:8]) % 23]
+    return False
+
+
+def _doc_type(doc: str) -> Optional[str]:
+    if re.match(r"^\d{8}[A-Z]$", doc):
+        return "DNI"
+    if re.match(r"^[XYZ]\d{7}[A-Z]$", doc):
+        return "NIE"
+    return None
+
+
+def _clean_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ \-']", "", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or None
+
+
+def _has_ocr_noise(value: Optional[str]) -> bool:
+    """Cert si el camp té caràcters no esperats en un nom propi."""
+    if not value:
+        return False
+    return bool(re.search(r"[^A-Za-zÀ-ÖØ-öø-ÿ \-']", value))
+
+
+# ---------------------------------------------------------------------------
+# Parser — Phase 1: extracció raw
+# ---------------------------------------------------------------------------
 
 class DNIParser:
-    """Parser per DNI espanyol"""
-
-    # Lletres de validació DNI
-    DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
 
     @staticmethod
-    def validate_dni(dni: str) -> bool:
-        """Valida un DNI espanyol"""
-        if not re.match(r'^\d{8}[A-Z]$', dni):
-            return False
-
-        number = int(dni[:8])
-        letter = dni[8]
-        expected_letter = DNIParser.DNI_LETTERS[number % 23]
-
-        return letter == expected_letter
-
-    @staticmethod
-    def parse_mrz(text: str) -> Optional[DNIData]:
+    def parse_mrz(text: str) -> Optional[tuple[DNIDatos, str]]:
         """
-        Parseja la zona MRZ del DNI (part frontal)
-
-        Format MRZ DNI:
-        Línia 1: IDESPBHV122738077612097T<<<<<<
-        Línia 2: 7301245M2808288ESP<<<<<<<<<<<6
-        Línia 3: COLL<CEREZO<<JOAQUIN<<<<<<<<<<
+        Intenta parsejar l'MRZ de 3 línies.
+        Retorna (DNIDatos, raw_mrz_text) o None si no es troba.
         """
-        lines = text.split('\n')
-
-        # Buscar línies MRZ (comencen amb ID)
-        mrz_lines = []
+        lines = text.split("\n")
+        mrz_lines: list[str] = []
         for line in lines:
-            clean_line = line.strip().upper()
-            if clean_line.startswith('ID') and len(clean_line) >= 30:
-                mrz_lines.append(clean_line)
-            elif len(mrz_lines) > 0 and len(clean_line) >= 30:
-                mrz_lines.append(clean_line)
-            elif len(mrz_lines) >= 3:
+            clean = line.strip().upper()
+            if clean.startswith("ID") and len(clean) >= 30:
+                mrz_lines.append(clean)
+            elif mrz_lines and len(clean) >= 30:
+                mrz_lines.append(clean)
+            if len(mrz_lines) >= 3:
                 break
 
         if len(mrz_lines) < 3:
             return None
 
         try:
-            # Línia 1: IDESP + altres + DNI
-            line1 = mrz_lines[0].replace(' ', '')
-            dni_match = re.search(r'(\d{8}[A-Z])', line1)
-            dni = dni_match.group(1) if dni_match else None
+            # Línia 1: DNI/NIE
+            line1 = mrz_lines[0].replace(" ", "")
+            doc_m = re.search(r"(\d{8}[A-Z]|[XYZ]\d{7}[A-Z])", line1)
+            numero_documento = doc_m.group(1) if doc_m else None
 
-            # Línia 2: Data naixement + sexe + data caducitat
-            line2 = mrz_lines[1].replace(' ', '')
-            data_naixement = f"{line2[4:6]}/{line2[2:4]}/{line2[0:2]}"
-            sexe = line2[7]
-            data_caducitat = f"{line2[12:14]}/{line2[10:12]}/{line2[8:10]}"
-            nacionalitat = line2[15:18].replace('<', '').strip()
+            # Línia 2: dates + sexe + nacionalitat
+            line2 = mrz_lines[1].replace(" ", "")
+            raw_naix = f"{line2[4:6]}/{line2[2:4]}/{line2[0:2]}"
+            raw_cad  = f"{line2[12:14]}/{line2[10:12]}/{line2[8:10]}"
+            sexe_mrz = line2[7] if len(line2) > 7 else None
+            nac = line2[15:18].replace("<", "").strip() if len(line2) >= 18 else None
 
-            # Línia 3: Cognoms i nom
-            # Format MRZ: COGNOMS<<NOM (on < és espai dins cognoms/nom, << separa cognoms de nom)
-            line3 = mrz_lines[2].replace(' ', '')
-            if '<<' in line3:
-                parts = line3.split('<<', 1)
-                cognoms = parts[0].replace('<', ' ').strip()
-                nom = parts[1].replace('<', ' ').strip() if len(parts) > 1 else None
+            current_yy = date.today().year % 100
+
+            def convert_yy(yy: int) -> str:
+                return f"19{yy:02d}" if yy > current_yy + 10 else f"20{yy:02d}"
+
+            def mrz_date_to_iso(ddmmyy: str) -> Optional[str]:
+                parts = ddmmyy.split("/")
+                if len(parts) != 3:
+                    return None
+                dd, mm, yy = parts
+                yyyy = convert_yy(int(yy))
+                return f"{yyyy}-{mm}-{dd}"
+
+            # Línia 3: cognoms << nom
+            line3 = re.sub(r" *< *", "<", mrz_lines[2]).replace(" ", "<")
+            if "<<" in line3:
+                parts = line3.split("<<", 1)
+                cognoms_mrz = parts[0].replace("<", " ").strip()
+                nom_mrz = parts[1].replace("<", " ").strip() if len(parts) > 1 else None
             else:
-                # Fallback si no hi ha <<
-                cognoms = line3.replace('<', ' ').strip()
-                nom = None
+                cognoms_mrz = line3.replace("<", " ").strip()
+                nom_mrz = None
 
-            # Convertir dates
-            def convert_date(date_str: str) -> str:
-                dd, mm, yy = date_str.split('/')
-                yyyy = f"19{yy}" if int(yy) > 30 else f"20{yy}"
-                return f"{dd}/{mm}/{yyyy}"
+            raw_mrz = "\n".join(mrz_lines[:3])
 
-            return DNIData(
-                dni=dni,
-                nom=nom,
-                cognoms=cognoms,
-                nom_complet=f"{nom} {cognoms}" if nom and cognoms else None,
-                data_naixement=convert_date(data_naixement),
-                data_caducitat=convert_date(data_caducitat),
-                nacionalitat=nacionalitat or "ESP",
-                sexe="Home" if sexe == "M" else "Dona" if sexe == "F" else None,
-                ocr_engine="tesseract"
+            data = DNIDatos(
+                numero_documento=numero_documento,
+                tipo_numero=_doc_type(numero_documento) if numero_documento else None,
+                nombre=nom_mrz,
+                apellidos=cognoms_mrz,
+                nombre_completo=f"{nom_mrz} {cognoms_mrz}" if nom_mrz and cognoms_mrz else None,
+                sexo="M" if sexe_mrz == "M" else "F" if sexe_mrz == "F" else None,
+                nacionalidad=nac or "ESP",
+                fecha_nacimiento=mrz_date_to_iso(raw_naix),
+                fecha_caducidad=mrz_date_to_iso(raw_cad),
+                mrz=MRZData(
+                    raw=raw_mrz,
+                    document_number=numero_documento,
+                    surname=cognoms_mrz,
+                    name=nom_mrz,
+                    nationality=nac,
+                    birth_date=f"{line2[0:6]}" if len(line2) >= 6 else None,
+                    expiry_date=f"{line2[8:14]}" if len(line2) >= 14 else None,
+                    sex=sexe_mrz,
+                ),
             )
+            return data, raw_mrz
 
         except Exception as e:
-            print(f"Error parseig MRZ: {e}")
+            log.debug("mrz_parse_error: %s", type(e).__name__)
             return None
 
     @staticmethod
-    def parse_full_text(text: str) -> DNIData:
-        """
-        Parseja el text complet del DNI buscant camps específics
-        """
-        dni_data = DNIData()
+    def parse_full_text(text: str) -> DNIDatos:
+        """Phase 1: extracció raw per keywords del text complet."""
+        data = DNIDatos()
 
-        # Buscar DNI
-        dni_match = re.search(r'\b(\d{8}[A-Z])\b', text)
-        if dni_match:
-            dni_data.dni = dni_match.group(1)
+        # Número de document
+        doc_m = re.search(r"\b(\d{8}[A-Z]|[XYZ]\d{7}[A-Z])\b", text)
+        if doc_m:
+            data.numero_documento = doc_m.group(1)
+            data.tipo_numero = _doc_type(data.numero_documento)
 
-        # Keywords que indiquen el final d'un camp
         FIELD_KEYWORDS = [
-            'APELLIDOS', 'COGNOMS', 'NOMBRE', 'NOM', 'SEXO', 'SEXE',
-            'NACIONALIDAD', 'NACIONALITAT', 'FECHA', 'DATA',
-            'DOMICILIO', 'DOMICILI', 'LUGAR', 'LLOC', 'PADRE', 'PARE',
-            'MADRE', 'MARE', 'DNI', 'EQUIPO', 'EQUIP', 'IDNUM'
+            "APELLIDOS", "COGNOMS", "NOMBRE", "NOM", "SEXO", "SEXE",
+            "NACIONALIDAD", "NACIONALITAT", "FECHA", "DATA",
+            "DOMICILIO", "DOMICILI", "LUGAR", "LLOC", "PADRE", "PARE",
+            "MADRE", "MARE", "DNI", "EQUIPO", "EQUIP", "IDNUM",
         ]
 
-        def read_field_lines(lines, start_idx):
-            """Llegeix línies fins trobar el següent keyword o línia buida"""
-            field_lines = []
-            for j in range(start_idx, len(lines)):
-                line_content = lines[j].strip()
-
-                # Aturar si línia buida
-                if not line_content:
+        def read_field(lines, start):
+            parts = []
+            for j in range(start, len(lines)):
+                lc = lines[j].strip()
+                if not lc:
                     break
-
-                # Aturar si trobem un keyword (excepte si és la primera línia)
-                line_upper = line_content.upper()
-                if j > start_idx and any(keyword in line_upper for keyword in FIELD_KEYWORDS):
+                lu = lc.upper()
+                if j > start and any(kw in lu for kw in FIELD_KEYWORDS):
                     break
+                parts.append(lc)
+            return " ".join(parts)
 
-                field_lines.append(line_content)
-
-            return ' '.join(field_lines)
-
-        # Buscar nom i cognoms
-        lines = text.split('\n')
+        lines = text.split("\n")
         for i, line in enumerate(lines):
-            if 'APELLIDOS' in line.upper() or 'COGNOMS' in line.upper():
-                if i + 1 < len(lines):
-                    dni_data.cognoms = read_field_lines(lines, i + 1)
-            elif 'NOMBRE' in line.upper() or 'NOM' in line.upper():
-                # Evitar confusió amb "NOMBRE DEL PADRE" o "NOM DEL PARE"
-                if 'PADRE' not in line.upper() and 'PARE' not in line.upper() and 'MADRE' not in line.upper() and 'MARE' not in line.upper():
-                    if i + 1 < len(lines):
-                        dni_data.nom = read_field_lines(lines, i + 1)
+            lu = line.upper()
 
-            # Buscar adreça (DOMICILIO / DOMICILI)
-            elif 'DOMICILIO' in line.upper() or 'DOMICILI' in line.upper():
-                # L'adreça sol estar a les següents línies
+            if "APELLIDOS" in lu or "COGNOMS" in lu:
+                if i + 1 < len(lines):
+                    val = read_field(lines, i + 1)
+                    # Filtrar tokens alfanumèrics mixtos (artifacts OCR)
+                    tokens = [t for t in val.split()
+                              if not (any(c.isdigit() for c in t) and any(c.isalpha() for c in t))]
+                    data.apellidos = " ".join(tokens).strip() or None
+
+            elif "NOMBRE" in lu or "NOM" in lu:
+                if "PADRE" in lu or "PARE" in lu or "MADRE" in lu or "MARE" in lu:
+                    continue
+                if i + 1 < len(lines):
+                    val = read_field(lines, i + 1)
+                    # Eliminar token d'una sola lletra al principi (artifact OCR)
+                    tokens = val.split()
+                    if tokens and len(tokens[0]) == 1:
+                        tokens = tokens[1:]
+                    data.nombre = " ".join(tokens).strip() or None
+
+            elif "DOMICILIO" in lu or "DOMICILI" in lu:
                 adreca_lines = []
                 for j in range(i + 1, min(i + 5, len(lines))):
-                    next_line = lines[j].strip()
-                    # Aturar si trobem keywords no relacionades amb adreça
-                    if next_line and not any(keyword in next_line.upper() for keyword in ['FECHA', 'DATA', 'LUGAR', 'LLOC', 'PADRE', 'PARE', 'MADRE', 'MARE', 'EQUIPO', 'EQUIP', 'HIJO', 'FILL']):
-                        adreca_lines.append(next_line)
+                    nl = lines[j].strip()
+                    if nl and not any(kw in nl.upper() for kw in
+                                      ["FECHA", "DATA", "LUGAR", "LLOC", "PADRE", "PARE",
+                                       "MADRE", "MARE", "EQUIPO", "EQUIP"]):
+                        adreca_lines.append(nl)
                     else:
                         break
-
                 if adreca_lines:
-                    # Províncies espanyoles conegudes
-                    PROVINCIES_ESPANYOLES = [
-                        'BARCELONA', 'TARRAGONA', 'LLEIDA', 'GIRONA',  # Catalunya
-                        'MADRID', 'VALENCIA', 'ALICANTE', 'CASTELLON', 'CASTELLÓ',
-                        'SEVILLA', 'MALAGA', 'CADIZ', 'HUELVA', 'CORDOBA', 'GRANADA', 'JAEN', 'ALMERIA',
-                        'ZARAGOZA', 'HUESCA', 'TERUEL',
-                        'A CORUÑA', 'PONTEVEDRA', 'OURENSE', 'LUGO',
-                        'VIZCAYA', 'GUIPUZCOA', 'ALAVA', 'BIZKAIA', 'GIPUZKOA', 'ARABA',
-                        'NAVARRA', 'LA RIOJA', 'CANTABRIA', 'ASTURIAS',
-                        'MURCIA', 'BADAJOZ', 'CACERES', 'SALAMANCA', 'ZAMORA', 'VALLADOLID',
-                        'LEON', 'PALENCIA', 'BURGOS', 'SORIA', 'SEGOVIA', 'AVILA',
-                        'TOLEDO', 'CIUDAD REAL', 'CUENCA', 'GUADALAJARA', 'ALBACETE'
-                    ]
-
-                    # Primera línia: carrer i número
-                    if len(adreca_lines) > 0:
-                        # Netejar abreviatures comunes
-                        line0 = adreca_lines[0].replace('CRER.', 'CARRER').replace('C/', 'CARRER').replace('C.', 'CARRER')
-
-                        # Intentar separar carrer i número
-                        carrer_match = re.match(r'^(.+?)\s+(\d+.*?)$', line0)
-                        if carrer_match:
-                            dni_data.carrer = carrer_match.group(1).strip()
-                            dni_data.numero = carrer_match.group(2).strip()
+                    data.domicilio = adreca_lines[0]
+                    if len(adreca_lines) > 1:
+                        # Última línia pot ser província
+                        PROVINCIES = [
+                            "BARCELONA", "TARRAGONA", "LLEIDA", "GIRONA", "MADRID",
+                            "VALENCIA", "ALICANTE", "SEVILLA", "MALAGA", "ZARAGOZA",
+                            "BILBAO", "VIZCAYA", "NAVARRA", "MURCIA",
+                        ]
+                        last = adreca_lines[-1].upper()
+                        if any(p in last for p in PROVINCIES):
+                            data.provincia = adreca_lines[-1].strip()
+                            if len(adreca_lines) > 2:
+                                pob = adreca_lines[-2]
+                                pob = re.sub(r"^\d{5}\s+", "", pob)
+                                data.municipio = pob.strip()
                         else:
-                            dni_data.carrer = line0
+                            pob = adreca_lines[1]
+                            pob = re.sub(r"^\d{5}\s+", "", pob)
+                            data.municipio = pob.strip()
 
-                    # Detectar província a la darrera línia
-                    provincia_idx = None
-                    for idx in range(len(adreca_lines) - 1, 0, -1):
-                        line_upper = adreca_lines[idx].upper().strip()
-                        if any(prov in line_upper for prov in PROVINCIES_ESPANYOLES):
-                            provincia_idx = idx
-                            dni_data.provincia = adreca_lines[idx].strip()
-                            break
-
-                    # Si hem trobat província, la línia anterior és la població
-                    if provincia_idx and provincia_idx > 1:
-                        poblacio_line = adreca_lines[provincia_idx - 1]
-
-                        # Treure codi postal si existeix
-                        poblacio_line = re.sub(r'^\d{5}\s+', '', poblacio_line)
-                        dni_data.poblacio = poblacio_line.strip()
-
-                    # Si no hem trobat província, usar el mètode antic
-                    elif len(adreca_lines) > 1:
-                        # Format: "POBLACIÓ (PROVÍNCIA)" o "CP POBLACIÓ (PROVÍNCIA)"
-                        poblacio_line = adreca_lines[1]
-
-                        # Buscar província entre parèntesis
-                        provincia_match = re.search(r'\(([^)]+)\)', poblacio_line)
-                        if provincia_match:
-                            dni_data.provincia = provincia_match.group(1).strip()
-                            # Treure la província per obtenir població
-                            poblacio_line = re.sub(r'\s*\([^)]+\)', '', poblacio_line)
-
-                        # Treure codi postal si existeix
-                        poblacio_line = re.sub(r'^\d{5}\s+', '', poblacio_line)
-                        dni_data.poblacio = poblacio_line.strip()
-
-                        # Tercera línia: província (si no estava entre parèntesis)
-                        if len(adreca_lines) > 2 and not dni_data.provincia:
-                            dni_data.provincia = adreca_lines[2].strip()
-
-                    # Adreça completa (només primeres 4 línies màxim)
-                    dni_data.adreca_completa = ', '.join(adreca_lines[:4])
-
-            # Buscar data de naixement
-            elif ('FECHA' in line.upper() and 'NACIMIENTO' in line.upper()) or ('DATA' in line.upper() and 'NAIXEMENT' in line.upper()):
+            elif ("FECHA" in lu and "NACIMIENTO" in lu) or ("DATA" in lu and "NAIXEMENT" in lu):
                 if i + 1 < len(lines):
-                    data_str = lines[i + 1].strip()
-                    # Buscar format DD MM YYYY o DD/MM/YYYY
-                    date_match = re.search(r'(\d{2})[\s/](\d{2})[\s/](\d{4})', data_str)
-                    if date_match:
-                        dni_data.data_naixement = f"{date_match.group(1)}/{date_match.group(2)}/{date_match.group(3)}"
+                    dm = re.search(r"(\d{2})[\s/](\d{2})[\s/](\d{4})", lines[i + 1])
+                    if dm:
+                        raw = f"{dm.group(1)}/{dm.group(2)}/{dm.group(3)}"
+                        data.fecha_nacimiento = _validate_dmy(raw, 1900, date.today().year)
 
-            # Buscar sexe
-            elif 'SEXO' in line.upper() or 'SEXE' in line.upper():
-                if i + 1 < len(lines):
-                    sexe_str = lines[i + 1].strip().upper()
-                    if 'M' in sexe_str or 'H' in sexe_str:
-                        dni_data.sexe = "Home"
-                    elif 'F' in sexe_str or 'D' in sexe_str or 'MUJER' in sexe_str or 'DONA' in sexe_str:
-                        dni_data.sexe = "Dona"
+            elif ("NACIMIENTO" in lu or "NAIXEMENT" in lu) and \
+                 "FECHA" not in lu and "DATA" not in lu and \
+                 "LUGAR" not in lu and "LLOC" not in lu:
+                if i + 1 < len(lines) and not data.fecha_nacimiento:
+                    dm = re.search(r"(\d{2})[\s/](\d{2})[\s/](\d{4})", lines[i + 1])
+                    if dm:
+                        raw = f"{dm.group(1)}/{dm.group(2)}/{dm.group(3)}"
+                        data.fecha_nacimiento = _validate_dmy(raw, 1900, date.today().year)
 
-            # Buscar nacionalitat
-            elif 'NACIONALIDAD' in line.upper() or 'NACIONALITAT' in line.upper():
+            elif "VALIDEZ" in lu or "VALIDESA" in lu:
                 if i + 1 < len(lines):
-                    nac_str = lines[i + 1].strip()
-                    # Buscar codi de 3 lletres (ESP, FRA, etc) o nom complet
-                    if len(nac_str) <= 3 and nac_str.isalpha():
-                        dni_data.nacionalitat = nac_str.upper()
-                    elif 'ESPA' in nac_str.upper():
-                        dni_data.nacionalitat = "ESP"
+                    dates = re.findall(r"(\d{2})[\s/](\d{2})[\s/](\d{4})", lines[i + 1])
+                    if dates:
+                        dd, mm, yyyy = dates[-1]
+                        raw = f"{dd}/{mm}/{yyyy}"
+                        data.fecha_caducidad = _validate_dmy(raw, 2000, 2060)
 
-            # Buscar lloc de naixement
-            elif ('LUGAR' in line.upper() and 'NACIMIENTO' in line.upper()) or ('LLOC' in line.upper() and 'NAIXEMENT' in line.upper()):
+            elif "SEXO" in lu or "SEXE" in lu:
                 if i + 1 < len(lines):
-                    dni_data.lloc_naixement = lines[i + 1].strip()
+                    sv = lines[i + 1].strip().upper()
+                    if len(sv) <= 6:
+                        if sv in ("M", "H", "HOME", "HOMBRE"):
+                            data.sexo = "M"
+                        elif sv in ("F", "D", "V", "DONA", "MUJER"):
+                            data.sexo = "F"
 
-            # Buscar pare
-            elif 'PADRE' in line.upper() or 'PARE' in line.upper():
+            elif "NACIONALIDAD" in lu or "NACIONALITAT" in lu:
                 if i + 1 < len(lines):
-                    dni_data.pare = lines[i + 1].strip()
+                    nv = lines[i + 1].strip()
+                    if len(nv) <= 3 and nv.isalpha():
+                        data.nacionalidad = nv.upper()
+                    elif "ESPA" in nv.upper():
+                        data.nacionalidad = "ESP"
 
-            # Buscar mare
-            elif 'MADRE' in line.upper() or 'MARE' in line.upper():
+            elif ("LUGAR" in lu and "NACIMIENTO" in lu) or ("LLOC" in lu and "NAIXEMENT" in lu):
                 if i + 1 < len(lines):
-                    dni_data.mare = lines[i + 1].strip()
+                    data.lugar_nacimiento = lines[i + 1].strip()
+
+            elif "PADRE" in lu or "PARE" in lu:
+                if i + 1 < len(lines):
+                    data.nombre_padre = lines[i + 1].strip()
+
+            elif "MADRE" in lu or "MARE" in lu:
+                if i + 1 < len(lines):
+                    data.nombre_madre = lines[i + 1].strip()
 
         # Nom complet
-        if dni_data.nom and dni_data.cognoms:
-            dni_data.nom_complet = f"{dni_data.nom} {dni_data.cognoms}"
+        if data.nombre and data.apellidos:
+            data.nombre_completo = f"{data.nombre} {data.apellidos}"
 
-        return dni_data
+        return data
 
     @staticmethod
-    def parse(text: str) -> DNIData:
+    def parse(text: str) -> tuple[DNIDatos, Optional[str]]:
         """
-        Parse principal que intenta MRZ primer i després completa amb text complet
+        Parse principal: MRZ primer, complementat amb full_text.
+        Retorna (DNIDatos, raw_mrz_text | None).
         """
-        # Intentar MRZ primer
-        mrz_data = DNIParser.parse_mrz(text)
+        mrz_result = DNIParser.parse_mrz(text)
 
-        if mrz_data and mrz_data.dni:
-            # MRZ trobat - completar amb dades addicionals del text complet
-            full_text_data = DNIParser.parse_full_text(text)
+        if mrz_result:
+            mrz_data, raw_mrz = mrz_result
+            if mrz_data.numero_documento:
+                # Complementar amb full_text
+                ft_data = DNIParser.parse_full_text(text)
 
-            # Copiar dades addicionals que no estan al MRZ
-            if full_text_data.carrer:
-                mrz_data.carrer = full_text_data.carrer
-            if full_text_data.numero:
-                mrz_data.numero = full_text_data.numero
-            if full_text_data.poblacio:
-                mrz_data.poblacio = full_text_data.poblacio
-            if full_text_data.provincia:
-                mrz_data.provincia = full_text_data.provincia
-            if full_text_data.adreca_completa:
-                mrz_data.adreca_completa = full_text_data.adreca_completa
-            if full_text_data.lloc_naixement:
-                mrz_data.lloc_naixement = full_text_data.lloc_naixement
-            if full_text_data.pare:
-                mrz_data.pare = full_text_data.pare
-            if full_text_data.mare:
-                mrz_data.mare = full_text_data.mare
+                # Copiar camps addicionals que MRZ no té
+                for attr in ("domicilio", "municipio", "provincia", "lugar_nacimiento",
+                             "nombre_padre", "nombre_madre"):
+                    if getattr(ft_data, attr):
+                        setattr(mrz_data, attr, getattr(ft_data, attr))
 
-            # Preferir cognoms de full_text si són millors (amb espais)
-            # La MRZ pot tenir errors de lectura dels caràcters < que separen cognoms
-            if full_text_data.cognoms and ' ' in full_text_data.cognoms:
-                # Si full_text té cognoms amb espai i MRZ no, preferir full_text
-                if not mrz_data.cognoms or ' ' not in mrz_data.cognoms:
-                    mrz_data.cognoms = full_text_data.cognoms
-                    # Recalcular nom_complet
-                    if mrz_data.nom:
-                        mrz_data.nom_complet = f"{mrz_data.nom} {mrz_data.cognoms}"
+                # Preferir cognoms full_text si té espai (MRZ pot perdre < entre cognoms)
+                if ft_data.apellidos and " " in ft_data.apellidos:
+                    if not mrz_data.apellidos or " " not in mrz_data.apellidos:
+                        mrz_data.apellidos = ft_data.apellidos
+                        if mrz_data.nombre:
+                            mrz_data.nombre_completo = f"{mrz_data.nombre} {mrz_data.apellidos}"
 
-            return mrz_data
+                return mrz_data, raw_mrz
 
-        # Si MRZ falla, intentar text complet
-        return DNIParser.parse_full_text(text)
+        # Fallback: full_text
+        return DNIParser.parse_full_text(text), None
+
+    # ------------------------------------------------------------------
+    # Phase 2 — Validació i construcció resposta
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def validate_and_build_response(
+        data: DNIDatos,
+        raw_mrz: Optional[str],
+        ocr_engine: str,
+        ocr_confidence: float,
+    ) -> DNIValidationResponse:
+        """
+        Phase 2: valida tots els camps, genera ValidationItems normalitzats.
+        0 crèdits addicionals — Python pur.
+        """
+        errors: list[ValidationItem] = []
+        alerts: list[ValidationItem] = []
+        today = date.today()
+
+        # --- Netejar noms ---
+        for attr in ("nombre", "apellidos", "nombre_completo", "lugar_nacimiento",
+                     "nombre_padre", "nombre_madre"):
+            val = getattr(data, attr)
+            if val and _has_ocr_noise(val):
+                alerts.append(ValidationItem(
+                    code="DNI_NAME_OCR_NOISE",
+                    severity="warning",
+                    field=attr,
+                    message=f"El camp '{attr}' conté caràcters inesperats (possible soroll OCR).",
+                    evidence=val,
+                    suggested_fix="Verificar manualment el valor llegit.",
+                ))
+            setattr(data, attr, _clean_name(val))
+
+        # Recalcular nom complet
+        if data.nombre and data.apellidos:
+            data.nombre_completo = f"{data.nombre} {data.apellidos}"
+
+        # --- Validar número de document ---
+        if not data.numero_documento:
+            errors.append(ValidationItem(
+                code="DNI_MISSING_FIELD",
+                severity="critical",
+                field="numero_documento",
+                message="Número de document no detectat.",
+                suggested_fix="Revisar la qualitat de la imatge o orientació.",
+            ))
+        elif not validate_doc_number(data.numero_documento):
+            # Determinar el tipus de format
+            tipo = _doc_type(data.numero_documento)
+            if tipo:
+                # Format correcte però lletra de control incorrecta
+                expected = _expected_letter(data.numero_documento)
+                errors.append(ValidationItem(
+                    code="DNI_CHECKLETTER_MISMATCH",
+                    severity="critical",
+                    field="numero_documento",
+                    message=f"Lletra de control incorrecta per {tipo}.",
+                    evidence=f"Llegit: '{data.numero_documento[-1]}', esperat: '{expected}'",
+                    suggested_fix="Possible error OCR en la lletra final. Verificar manualment.",
+                ))
+            else:
+                errors.append(ValidationItem(
+                    code="DNI_NUMBER_INVALID",
+                    severity="critical",
+                    field="numero_documento",
+                    message=f"Format de document no reconegut: '{data.numero_documento}'.",
+                    suggested_fix="Ha de ser DNI (8 dígits + lletra) o NIE (X/Y/Z + 7 dígits + lletra).",
+                ))
+            data.numero_documento = None  # descartar
+
+        # --- Validar camps mínims absents ---
+        camps_minims_absents = 0
+        for camp in _CAMPS_MINIMS:
+            if not getattr(data, camp):
+                camps_minims_absents += 1
+                if camp != "numero_documento":  # ja gestionat
+                    errors.append(ValidationItem(
+                        code="DNI_MISSING_FIELD",
+                        severity="error",
+                        field=camp,
+                        message=f"Camp mínim no detectat: '{camp}'.",
+                        suggested_fix="Verificar que la imatge mostra la cara correcta del document.",
+                    ))
+
+        # --- Validar dates ---
+        if data.fecha_nacimiento:
+            if data.fecha_nacimiento > today.isoformat():
+                errors.append(ValidationItem(
+                    code="DNI_BIRTHDATE_INVALID",
+                    severity="critical",
+                    field="fecha_nacimiento",
+                    message="Data de naixement en el futur.",
+                    evidence=data.fecha_nacimiento,
+                ))
+                data.fecha_nacimiento = None
+            else:
+                birth = date.fromisoformat(data.fecha_nacimiento)
+                age = (today - birth).days // 365
+                if age < 18:
+                    alerts.append(ValidationItem(
+                        code="DNI_UNDERAGE",
+                        severity="warning",
+                        field="fecha_nacimiento",
+                        message=f"El titular és menor d'edat ({age} anys).",
+                        evidence=data.fecha_nacimiento,
+                        suggested_fix="Verificar si el tràmit requereix majoria d'edat.",
+                    ))
+
+        if data.fecha_caducidad:
+            if data.fecha_caducidad < today.isoformat():
+                errors.append(ValidationItem(
+                    code="DNI_EXPIRED",
+                    severity="error",
+                    field="fecha_caducidad",
+                    message=f"Document caducat ({data.fecha_caducidad}).",
+                    evidence=data.fecha_caducidad,
+                    suggested_fix="Sol·licitar renovació o document vigent.",
+                ))
+
+        # --- Coherència creuada MRZ vs text ---
+        if data.mrz and data.mrz.document_number and data.numero_documento:
+            if data.mrz.document_number != data.numero_documento:
+                errors.append(ValidationItem(
+                    code="DNI_MRZ_MISMATCH",
+                    severity="critical",
+                    field="numero_documento",
+                    message="El número del document no coincideix entre el text i la zona MRZ.",
+                    evidence=f"Text: '{data.numero_documento}', MRZ: '{data.mrz.document_number}'",
+                    suggested_fix="Possible error OCR crític o document alterat. Verificació manual obligatòria.",
+                ))
+
+        # --- Nationalitat: format 2-3 lletres ---
+        if data.nacionalidad and not re.match(r"^[A-Z]{2,3}$", data.nacionalidad):
+            data.nacionalidad = None
+
+        # --- Calcular confiança ---
+        confianza = compute_confianza(alerts, errors, camps_minims_absents, ocr_confidence)
+
+        # --- valido: cap critical i camps mínims presents ---
+        has_critical = any(e.severity == "critical" for e in errors)
+        has_minimums = bool(data.numero_documento and data.nombre and data.apellidos)
+        valido = not has_critical and has_minimums
+
+        message = "Document processat correctament." if valido else "Document amb errors que requereixen revisió."
+
+        return DNIValidationResponse(
+            valido=valido,
+            confianza_global=confianza,
+            datos=data,
+            alertas=alerts,
+            errores_detectados=errors,
+            raw=RawOCR(ocr_engine=ocr_engine, ocr_confidence=round(ocr_confidence, 1)),
+            meta=MetaInfo(success=valido, message=f"[{ocr_engine}] {message}"),
+        )
+
+    # ------------------------------------------------------------------
+    # Decisió Tesseract → Vision
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def should_fallback_to_vision(data: DNIDatos, tess_confidence: float) -> tuple[bool, str]:
+        """
+        Decideix si cal Vision. Treballa sobre DNIDatos de Phase 1.
+        """
+        if not data.numero_documento or not validate_doc_number(data.numero_documento):
+            return True, "document_invalid_o_absent"
+        if not data.nombre:
+            return True, "nom_absent"
+        if not data.apellidos:
+            return True, "apellidos_absents"
+        # Estimació de qualitat ràpida: comptar camps principals
+        principals = [data.numero_documento, data.nombre, data.apellidos,
+                      data.fecha_nacimiento, data.fecha_caducidad]
+        score = sum(20 for v in principals if v)
+        if score < 60:
+            return True, f"qualitat_baixa:{score}"
+        if tess_confidence < 35.0:
+            return True, f"confidence_baixa:{tess_confidence:.0f}"
+        return False, "tesseract_acceptat"
+
+
+# ---------------------------------------------------------------------------
+# Helper intern
+# ---------------------------------------------------------------------------
+
+def _expected_letter(doc: str) -> str:
+    doc = doc.upper()
+    if doc[0] in "XYZ":
+        prefix = {"X": "0", "Y": "1", "Z": "2"}[doc[0]]
+        number = int(prefix + doc[1:8])
+    else:
+        number = int(doc[:8])
+    return DNI_LETTERS[number % 23]
 
 
 # Singleton

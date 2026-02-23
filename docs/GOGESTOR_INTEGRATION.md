@@ -1,77 +1,35 @@
 # Integració OCR Agent amb GoGestor Backend
 
-Guia completa per integrar l'OCR Agent amb el backend de GoGestor (PHP/Laravel).
-
-## Índex
-
-- [Variables d'entorn](#variables-dentorn)
-- [Configuració a Railway](#configuració-a-railway)
-- [Service Layer](#service-layer)
-- [Exemples d'ús](#exemples-dús)
-- [Gestió d'errors](#gestió-derrors)
-- [Testing](#testing)
-- [Best practices](#best-practices)
+> **Contracte v1** — Resposta unificada amb `valido`, `confianza_global`, `datos`, `errores_detectados`.
+> Totes les dates en format ISO 8601 (`YYYY-MM-DD`).
 
 ---
 
-## Variables d'entorn
+## Configuració ràpida
 
-### 1. Afegir al fitxer `.env` de GoGestor
+### 1. Variables d'entorn (`.env` GoGestor i Railway)
 
 ```bash
-# OCR Agent Configuration
 OCR_AGENT_URL=https://ocr-production-abec.up.railway.app
-OCR_AGENT_API_KEY=your-ocr-agent-api-key-here
-OCR_AGENT_TIMEOUT=30
+OCR_AGENT_TIMEOUT=35
 OCR_AGENT_ENABLED=true
 ```
 
-### 2. Afegir a Railway (GoGestor Backend)
-
-A Railway Dashboard del projecte GoGestor:
-
-1. Anar a **Variables**
-2. Afegir les següents variables:
-
-| Variable | Valor |
-|----------|-------|
-| `OCR_AGENT_URL` | `https://ocr-production-abec.up.railway.app` |
-| `OCR_AGENT_API_KEY` | `your-ocr-agent-api-key-here` |
-| `OCR_AGENT_TIMEOUT` | `30` |
-| `OCR_AGENT_ENABLED` | `true` |
-
-3. Guardar i redeploy
-
----
-
-## Configuració a Railway
-
-### Actualitzar configuració de GoGestor
-
-Al fitxer `config/services.php` (o crear si no existeix):
+### 2. `config/services.php`
 
 ```php
-<?php
-
-return [
-    // ... altres serveis ...
-
-    'ocr_agent' => [
-        'url' => env('OCR_AGENT_URL'),
-        'api_key' => env('OCR_AGENT_API_KEY'),
-        'timeout' => env('OCR_AGENT_TIMEOUT', 30),
-        'enabled' => env('OCR_AGENT_ENABLED', true),
-    ],
-];
+'ocr_agent' => [
+    'url'     => env('OCR_AGENT_URL'),
+    'timeout' => env('OCR_AGENT_TIMEOUT', 35),
+    'enabled' => env('OCR_AGENT_ENABLED', true),
+],
 ```
 
 ---
 
-## Service Layer
+## OcrService.php (contracte v1)
 
-### 1. Crear servei `OcrService.php`
-
-Crear el fitxer: `app/Services/OcrService.php`
+Crear `app/Services/OcrService.php`:
 
 ```php
 <?php
@@ -85,655 +43,417 @@ use Illuminate\Http\UploadedFile;
 class OcrService
 {
     protected string $baseUrl;
-    protected string $apiKey;
     protected int $timeout;
     protected bool $enabled;
 
     public function __construct()
     {
         $this->baseUrl = config('services.ocr_agent.url');
-        $this->apiKey = config('services.ocr_agent.api_key');
-        $this->timeout = config('services.ocr_agent.timeout', 30);
-        $this->enabled = config('services.ocr_agent.enabled', true);
+        $this->timeout = (int) config('services.ocr_agent.timeout', 35);
+        $this->enabled = (bool) config('services.ocr_agent.enabled', true);
     }
 
     /**
-     * Processar DNI (frontal o posterior)
+     * Processar DNI o NIE.
      *
-     * @param UploadedFile|string $file - Fitxer o path del fitxer
-     * @param bool $preprocess - Aplicar preprocessament
-     * @param string $preprocessMode - Mode: standard, aggressive, document
-     * @return array|null
+     * Retorna l'array complet del contracte v1:
+     *   ['valido' => bool, 'confianza_global' => int, 'datos' => [...], ...]
+     * o null si hi ha un error de transport.
      */
-    public function processarDNI($file, bool $preprocess = true, string $preprocessMode = 'standard'): ?array
-    {
-        if (!$this->enabled) {
-            Log::warning('OCR Agent està desactivat');
-            return null;
-        }
+    public function processarDNI(
+        UploadedFile|string $file,
+        bool $preprocess = false,
+        string $preprocessMode = 'standard'
+    ): ?array {
+        if (!$this->enabled) return null;
 
         try {
-            $response = Http::timeout($this->timeout)
-                ->withHeaders(['X-API-Key' => $this->apiKey])
-                ->attach(
-                    'file',
-                    $this->getFileContents($file),
-                    $this->getFileName($file)
-                )
-                ->post("{$this->baseUrl}/ocr/dni", [
-                    'preprocess' => $preprocess,
-                    'preprocess_mode' => $preprocessMode
-                ]);
-
-            if ($response->successful()) {
-                $data = $response->json();
-
-                if ($data['success'] ?? false) {
-                    Log::info('DNI processat correctament', [
-                        'dni' => $data['data']['dni'] ?? null
-                    ]);
-                    return $data['data'];
-                }
+            $params = [];
+            if ($preprocess) {
+                $params['preprocess']      = 'true';
+                $params['preprocess_mode'] = $preprocessMode;
             }
 
-            Log::error('Error processant DNI', [
-                'status' => $response->status(),
-                'body' => $response->body()
+            $response = Http::timeout($this->timeout)
+                ->attach('file', $this->fileContents($file), $this->fileName($file))
+                ->post("{$this->baseUrl}/ocr/dni", $params);
+
+            if (!$response->successful()) {
+                Log::error('OCR DNI HTTP error', [
+                    'status' => $response->status(),
+                    'detail' => $response->json('detail'),
+                ]);
+                return null;
+            }
+
+            $data = $response->json();
+
+            Log::info('OCR DNI processat', [
+                'valido'           => $data['valido'] ?? null,
+                'confianza_global' => $data['confianza_global'] ?? null,
+                'ocr_engine'       => $data['raw']['ocr_engine'] ?? null,
+                'errors'           => count($data['errores_detectados'] ?? []),
             ]);
 
-            return null;
+            return $data;
 
         } catch (\Exception $e) {
-            Log::error('Excepció processant DNI: ' . $e->getMessage());
+            Log::error('OCR DNI excepció: ' . $e->getMessage());
             return null;
         }
     }
 
     /**
-     * Processar Permís de Circulació
+     * Processar Permís de Circulació.
      *
-     * @param UploadedFile|string $file
-     * @param bool $preprocess
-     * @param string $preprocessMode
-     * @return array|null
+     * Retorna l'array complet del contracte v1 o null.
      */
-    public function processarPermis($file, bool $preprocess = true, string $preprocessMode = 'standard'): ?array
-    {
-        if (!$this->enabled) {
-            Log::warning('OCR Agent està desactivat');
-            return null;
-        }
+    public function processarPermis(
+        UploadedFile|string $file,
+        bool $preprocess = false,
+        string $preprocessMode = 'standard'
+    ): ?array {
+        if (!$this->enabled) return null;
 
         try {
-            $response = Http::timeout($this->timeout)
-                ->withHeaders(['X-API-Key' => $this->apiKey])
-                ->attach(
-                    'file',
-                    $this->getFileContents($file),
-                    $this->getFileName($file)
-                )
-                ->post("{$this->baseUrl}/ocr/permis", [
-                    'preprocess' => $preprocess,
-                    'preprocess_mode' => $preprocessMode
-                ]);
-
-            if ($response->successful()) {
-                $data = $response->json();
-
-                if ($data['success'] ?? false) {
-                    Log::info('Permís processat correctament', [
-                        'matricula' => $data['data']['matricula'] ?? null
-                    ]);
-                    return $data['data'];
-                }
+            $params = [];
+            if ($preprocess) {
+                $params['preprocess']      = 'true';
+                $params['preprocess_mode'] = $preprocessMode;
             }
 
-            Log::error('Error processant Permís', [
-                'status' => $response->status(),
-                'body' => $response->body()
+            $response = Http::timeout($this->timeout)
+                ->attach('file', $this->fileContents($file), $this->fileName($file))
+                ->post("{$this->baseUrl}/ocr/permis", $params);
+
+            if (!$response->successful()) {
+                Log::error('OCR Permís HTTP error', [
+                    'status' => $response->status(),
+                    'detail' => $response->json('detail'),
+                ]);
+                return null;
+            }
+
+            $data = $response->json();
+
+            Log::info('OCR Permís processat', [
+                'valido'           => $data['valido'] ?? null,
+                'confianza_global' => $data['confianza_global'] ?? null,
+                'ocr_engine'       => $data['raw']['ocr_engine'] ?? null,
+                'errors'           => count($data['errores_detectados'] ?? []),
             ]);
 
-            return null;
+            return $data;
 
         } catch (\Exception $e) {
-            Log::error('Excepció processant Permís: ' . $e->getMessage());
+            Log::error('OCR Permís excepció: ' . $e->getMessage());
             return null;
         }
     }
 
-    /**
-     * Health check de l'OCR Agent
-     *
-     * @return array|null
-     */
     public function healthCheck(): ?array
     {
         try {
-            $response = Http::timeout(5)
-                ->get("{$this->baseUrl}/health");
-
-            if ($response->successful()) {
-                return $response->json();
-            }
-
-            return null;
-
+            $response = Http::timeout(5)->get("{$this->baseUrl}/health");
+            return $response->successful() ? $response->json() : null;
         } catch (\Exception $e) {
-            Log::error('OCR Agent health check failed: ' . $e->getMessage());
             return null;
         }
     }
 
-    /**
-     * Obtenir contingut del fitxer
-     */
-    protected function getFileContents($file): string
+    protected function fileContents(UploadedFile|string $file): string
     {
-        if ($file instanceof UploadedFile) {
-            return file_get_contents($file->getRealPath());
-        }
-
-        return file_get_contents($file);
+        return $file instanceof UploadedFile
+            ? file_get_contents($file->getRealPath())
+            : file_get_contents($file);
     }
 
-    /**
-     * Obtenir nom del fitxer
-     */
-    protected function getFileName($file): string
+    protected function fileName(UploadedFile|string $file): string
     {
-        if ($file instanceof UploadedFile) {
-            return $file->getClientOriginalName();
-        }
-
-        return basename($file);
+        return $file instanceof UploadedFile
+            ? $file->getClientOriginalName()
+            : basename($file);
     }
 }
 ```
 
-### 2. Registrar servei (opcional)
-
-Al fitxer `app/Providers/AppServiceProvider.php`:
+### Registrar singleton (`AppServiceProvider.php`)
 
 ```php
-<?php
-
-namespace App\Providers;
-
-use Illuminate\Support\ServiceProvider;
-use App\Services\OcrService;
-
-class AppServiceProvider extends ServiceProvider
-{
-    public function register()
-    {
-        $this->app->singleton(OcrService::class, function ($app) {
-            return new OcrService();
-        });
-    }
-}
+$this->app->singleton(OcrService::class);
 ```
 
 ---
 
 ## Exemples d'ús
 
-### 1. Des d'un Controller
+### Processar DNI des d'un controller
 
 ```php
-<?php
-
-namespace App\Http\Controllers;
-
 use App\Services\OcrService;
-use Illuminate\Http\Request;
 
 class DocumentController extends Controller
 {
-    protected OcrService $ocrService;
+    public function __construct(protected OcrService $ocr) {}
 
-    public function __construct(OcrService $ocrService)
-    {
-        $this->ocrService = $ocrService;
-    }
-
-    /**
-     * Processar DNI pujat per l'usuari
-     */
-    public function processarDNI(Request $request)
+    public function pujarDNI(Request $request)
     {
         $request->validate([
-            'dni_frontal' => 'required|image|max:10240', // max 10MB
+            'dni' => 'required|image|mimes:jpeg,jpg,png,webp|max:5120',
         ]);
 
-        // Processar DNI frontal
-        $dniData = $this->ocrService->processarDNI(
-            $request->file('dni_frontal'),
-            preprocess: true,
-            preprocessMode: 'standard'
-        );
+        $resultat = $this->ocr->processarDNI($request->file('dni'));
 
-        if (!$dniData) {
+        if ($resultat === null) {
+            return response()->json(['error' => 'Servei OCR no disponible'], 503);
+        }
+
+        // Comprovar validesa del document
+        if (!$resultat['valido']) {
+            $errors = collect($resultat['errores_detectados'])
+                ->where('severity', 'critical')
+                ->pluck('message')
+                ->all();
+
             return response()->json([
-                'error' => 'No s\'ha pogut processar el DNI'
-            ], 500);
+                'error'   => 'Document invàlid',
+                'detalls' => $errors,
+            ], 422);
         }
 
-        // Guardar dades a la base de dades
-        // ... lògica per guardar ...
+        // Avisos no bloquejants (menor d'edat, soroll OCR...)
+        $alertes = collect($resultat['alertas'])->pluck('message')->all();
 
-        return response()->json([
-            'success' => true,
-            'data' => $dniData
-        ]);
-    }
+        $datos = $resultat['datos'];
 
-    /**
-     * Processar DNI amb frontal i posterior
-     */
-    public function processarDNIComplet(Request $request)
-    {
-        $request->validate([
-            'dni_frontal' => 'required|image|max:10240',
-            'dni_posterior' => 'nullable|image|max:10240',
-        ]);
-
-        // Processar frontal
-        $frontalData = $this->ocrService->processarDNI(
-            $request->file('dni_frontal')
-        );
-
-        if (!$frontalData) {
-            return response()->json([
-                'error' => 'Error processant la part frontal del DNI'
-            ], 500);
-        }
-
-        // Processar posterior (si existeix)
-        $posteriorData = null;
-        if ($request->hasFile('dni_posterior')) {
-            $posteriorData = $this->ocrService->processarDNI(
-                $request->file('dni_posterior')
-            );
-        }
-
-        // Combinar dades (el posterior sobrescriu el frontal si hi ha conflictes)
-        $dniComplet = array_merge($frontalData, $posteriorData ?? []);
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'frontal' => $frontalData,
-                'posterior' => $posteriorData,
-                'combinat' => $dniComplet
+        // Guardar a la base de dades
+        $client = Client::updateOrCreate(
+            ['numero_documento' => $datos['numero_documento']],
+            [
+                'nombre'           => $datos['nombre'],
+                'apellidos'        => $datos['apellidos'],
+                'fecha_nacimiento' => $datos['fecha_nacimiento'], // YYYY-MM-DD
+                'fecha_caducidad'  => $datos['fecha_caducidad'],  // YYYY-MM-DD
+                'sexo'             => $datos['sexo'],             // M | F | X
+                'nacionalidad'     => $datos['nacionalidad'],
+                'domicilio'        => $datos['domicilio'],
+                'municipio'        => $datos['municipio'],
             ]
+        );
+
+        return response()->json([
+            'success'          => true,
+            'confianza_global' => $resultat['confianza_global'],
+            'alertes'          => $alertes,
+            'client'           => $client,
         ]);
     }
 
-    /**
-     * Processar Permís de Circulació
-     */
-    public function processarPermis(Request $request)
+    public function pujarPermis(Request $request)
     {
         $request->validate([
-            'permis' => 'required|image|max:10240',
+            'permis' => 'required|image|mimes:jpeg,jpg,png,webp|max:5120',
         ]);
 
-        $permisData = $this->ocrService->processarPermis(
-            $request->file('permis')
+        $resultat = $this->ocr->processarPermis($request->file('permis'));
+
+        if ($resultat === null) {
+            return response()->json(['error' => 'Servei OCR no disponible'], 503);
+        }
+
+        if (!$resultat['valido']) {
+            return response()->json([
+                'error'   => 'Permís invàlid',
+                'detalls' => collect($resultat['errores_detectados'])->pluck('message'),
+            ], 422);
+        }
+
+        $datos = $resultat['datos'];
+
+        $vehicle = Vehicle::updateOrCreate(
+            ['matricula' => $datos['matricula']],
+            [
+                'numero_bastidor'           => $datos['numero_bastidor'],
+                'marca'                     => $datos['marca'],
+                'modelo'                    => $datos['modelo'],
+                'cilindrada_cc'             => $datos['cilindrada_cc'],
+                'potencia_kw'               => $datos['potencia_kw'],
+                'potencia_fiscal'           => $datos['potencia_fiscal'],
+                'combustible'               => $datos['combustible'],
+                'emissions_co2'             => $datos['emissions_co2'],
+                'plazas'                    => $datos['plazas'],
+                'tipo_vehiculo'             => $datos['tipo_vehiculo'],
+                'titular_nombre'            => $datos['titular_nombre'],
+                'fecha_matriculacion'       => $datos['fecha_matriculacion'], // YYYY-MM-DD
+                'fecha_ultima_transferencia'=> $datos['fecha_ultima_transferencia'], // YYYY-MM-DD
+                'proxima_itv'               => $datos['proxima_itv'],         // YYYY-MM-DD
+            ]
         );
 
-        if (!$permisData) {
-            return response()->json([
-                'error' => 'No s\'ha pogut processar el Permís de Circulació'
-            ], 500);
-        }
-
         return response()->json([
-            'success' => true,
-            'data' => $permisData
+            'success'          => true,
+            'confianza_global' => $resultat['confianza_global'],
+            'vehicle'          => $vehicle,
         ]);
-    }
-}
-```
-
-### 2. Des d'un Command/Job
-
-```php
-<?php
-
-namespace App\Console\Commands;
-
-use Illuminate\Console\Command;
-use App\Services\OcrService;
-
-class ProcessarDocuments extends Command
-{
-    protected $signature = 'ocr:processar {path}';
-    protected $description = 'Processar documents amb OCR Agent';
-
-    protected OcrService $ocrService;
-
-    public function __construct(OcrService $ocrService)
-    {
-        parent::__construct();
-        $this->ocrService = $ocrService;
-    }
-
-    public function handle()
-    {
-        $path = $this->argument('path');
-
-        if (!file_exists($path)) {
-            $this->error("Fitxer no trobat: {$path}");
-            return 1;
-        }
-
-        $this->info("Processant document: {$path}");
-
-        $data = $this->ocrService->processarDNI($path);
-
-        if ($data) {
-            $this->info("DNI: " . ($data['dni'] ?? 'N/A'));
-            $this->info("Nom: " . ($data['nom_complet'] ?? 'N/A'));
-            $this->info("Confiança: " . ($data['confidence'] ?? 0) . "%");
-            return 0;
-        }
-
-        $this->error("Error processant el document");
-        return 1;
-    }
-}
-```
-
-### 3. Des d'un Model (Event Listener)
-
-```php
-<?php
-
-namespace App\Models;
-
-use Illuminate\Database\Eloquent\Model;
-use App\Services\OcrService;
-
-class Client extends Model
-{
-    protected static function booted()
-    {
-        static::updating(function ($client) {
-            // Si s'ha pujat un nou DNI, processar-lo automàticament
-            if ($client->isDirty('dni_image_path')) {
-                $ocrService = app(OcrService::class);
-                $dniData = $ocrService->processarDNI($client->dni_image_path);
-
-                if ($dniData) {
-                    $client->dni = $dniData['dni'] ?? null;
-                    $client->nom_complet = $dniData['nom_complet'] ?? null;
-                    $client->data_naixement = $dniData['data_naixement'] ?? null;
-                    $client->adreca = $dniData['adreca_completa'] ?? null;
-                }
-            }
-        });
     }
 }
 ```
 
 ---
 
-## Gestió d'errors
+## Gestió d'errors i alertes
 
-### Tipus d'errors i com gestionar-los
+### Estructura `ValidationItem` (errores_detectados / alertas)
 
-```php
-public function processarDNIAmbValidacio(Request $request)
+```json
 {
-    try {
-        $dniData = $this->ocrService->processarDNI(
-            $request->file('dni')
-        );
-
-        if (!$dniData) {
-            return response()->json([
-                'error' => 'No s\'ha pogut processar el DNI',
-                'message' => 'El servei OCR no està disponible o no ha pogut extreure les dades'
-            ], 500);
-        }
-
-        // Validar que les dades essencials existeixen
-        if (empty($dniData['dni'])) {
-            return response()->json([
-                'error' => 'DNI no detectat',
-                'message' => 'No s\'ha pogut extreure el número de DNI. Prova amb una imatge de millor qualitat.'
-            ], 422);
-        }
-
-        // Validar format DNI
-        if (!preg_match('/^\d{8}[A-Z]$/', $dniData['dni'])) {
-            return response()->json([
-                'error' => 'Format DNI invàlid',
-                'message' => 'El DNI detectat no té un format vàlid',
-                'dni_detectat' => $dniData['dni']
-            ], 422);
-        }
-
-        // Validar confiança mínima (recomanat: 80%)
-        if (($dniData['confidence'] ?? 0) < 80) {
-            return response()->json([
-                'warning' => 'Baixa confiança',
-                'message' => 'Les dades s\'han extret amb baixa confiança. Revisa-les manualment.',
-                'confidence' => $dniData['confidence'],
-                'data' => $dniData
-            ], 200);
-        }
-
-        return response()->json([
-            'success' => true,
-            'data' => $dniData
-        ]);
-
-    } catch (\Illuminate\Http\Client\ConnectionException $e) {
-        Log::error('OCR Agent no accessible: ' . $e->getMessage());
-
-        return response()->json([
-            'error' => 'Servei OCR no disponible',
-            'message' => 'No s\'ha pogut connectar amb el servei OCR. Intenta-ho més tard.'
-        ], 503);
-
-    } catch (\Exception $e) {
-        Log::error('Error inesperat processant DNI: ' . $e->getMessage());
-
-        return response()->json([
-            'error' => 'Error inesperat',
-            'message' => 'S\'ha produït un error processant el document'
-        ], 500);
-    }
+  "code": "DNI_EXPIRED",
+  "severity": "critical | error | warning",
+  "field": "fecha_caducidad",
+  "message": "Document caducat (2020-01-01)",
+  "evidence": "2020-01-01",
+  "suggested_fix": "Sol·licitar renovació"
 }
 ```
 
----
+### Regla de negoci
 
-## Testing
-
-### Test unitari del servei
-
-Crear: `tests/Unit/OcrServiceTest.php`
+| Situació | `valido` | Acció recomanada |
+|----------|----------|------------------|
+| `valido: true` + `confianza_global ≥ 90` | ✅ | Acceptar directament |
+| `valido: true` + `confianza_global 70–89` | ⚠️ | Acceptar amb avís de revisió |
+| `valido: true` + `confianza_global < 70` | ⚠️ | Demanar revisió manual |
+| `valido: false` | ❌ | Demanar nou document |
 
 ```php
-<?php
+function avaluarOcr(array $resultat): string
+{
+    if (!$resultat['valido']) {
+        return 'INVALIT';
+    }
+    return match(true) {
+        $resultat['confianza_global'] >= 90 => 'ACCEPTAT',
+        $resultat['confianza_global'] >= 70 => 'ACCEPTAT_AMB_AVIS',
+        default                             => 'REVISAR_MANUALMENT',
+    };
+}
+```
 
-namespace Tests\Unit;
+### Codis d'error DNI
 
-use Tests\TestCase;
-use App\Services\OcrService;
+| Codi | Gravetat | Significat |
+|------|----------|------------|
+| `DNI_MISSING_FIELD` | critical / error | Camp mínim absent |
+| `DNI_NUMBER_INVALID` | critical | Format DNI/NIE invàlid |
+| `DNI_CHECKLETTER_MISMATCH` | critical | Lletra de control incorrecta |
+| `DNI_MRZ_MISMATCH` | critical | Discrepància entre text i MRZ |
+| `DNI_BIRTHDATE_INVALID` | critical | Data de naixement fora de rang |
+| `DNI_EXPIRED` | error | Document caducat |
+| `DNI_UNDERAGE` | warning | Titular menor de 18 anys |
+| `DNI_NAME_OCR_NOISE` | warning | Caràcters estranys al nom |
+
+### Codis d'error Permís
+
+| Codi | Gravetat | Significat |
+|------|----------|------------|
+| `VEH_MISSING_FIELD` | critical / error | Camp mínim absent |
+| `VEH_PLATE_INVALID` | critical | Format matrícula invàlid |
+| `VEH_VIN_INVALID_LENGTH` | critical | VIN sense 17 caràcters |
+| `VEH_VIN_INVALID_CHARS` | critical | VIN conté I, O o Q |
+| `VEH_OWNER_ID_INVALID` | error | NIF/NIE/CIF titular invàlid |
+| `VEH_DATES_INCONSISTENT` | error / warning | Dates incoherents |
+| `VEH_VIN_CHECKDIGIT` | warning | Dígit control VIN (normal en UE) |
+| `VEH_OCR_SUSPECT` | warning | Soroll OCR en un camp |
+
+---
+
+## Camps de resposta — referència ràpida
+
+### DNI (`datos`)
+
+| Camp | Tipus | Exemple |
+|------|-------|---------|
+| `numero_documento` | `string\|null` | `"77612097T"` |
+| `tipo_numero` | `"DNI"\|"NIE"\|null` | `"DNI"` |
+| `nombre` | `string\|null` | `"JOAQUIN"` |
+| `apellidos` | `string\|null` | `"COLL CEREZO"` |
+| `nombre_completo` | `string\|null` | `"JOAQUIN COLL CEREZO"` |
+| `sexo` | `"M"\|"F"\|"X"\|null` | `"M"` |
+| `nacionalidad` | `string\|null` | `"ESP"` |
+| `fecha_nacimiento` | `string\|null` ISO | `"1973-01-24"` |
+| `fecha_caducidad` | `string\|null` ISO | `"2028-08-28"` |
+| `domicilio` | `string\|null` | `"CARRER VENDRELL 5"` |
+| `municipio` | `string\|null` | `"CABRILS"` |
+| `provincia` | `string\|null` | `"BARCELONA"` |
+
+### Permís (`datos`)
+
+| Camp | Tipus | Exemple |
+|------|-------|---------|
+| `matricula` | `string\|null` | `"1177MTM"` |
+| `numero_bastidor` | `string\|null` | `"YARKAAC3100018794"` |
+| `marca` | `string\|null` | `"TOYOTA"` |
+| `modelo` | `string\|null` | `"TOYOTA YARIS"` |
+| `categoria` | `string\|null` | `"M1"` |
+| `fecha_matriculacion` | `string\|null` ISO | `"2024-08-08"` |
+| `titular_nombre` | `string\|null` | `"JOAQUIN COLL CEREZO"` |
+| `cilindrada_cc` | `int\|null` | `1490` |
+| `potencia_kw` | `float\|null` | `92.0` |
+| `potencia_fiscal` | `float\|null` | `125.1` |
+| `combustible` | `string\|null` | `"GASOLINA"` |
+| `emissions_co2` | `float\|null` | `120.5` |
+| `plazas` | `int\|null` | `5` |
+| `tipo_vehiculo` | `string\|null` | `"Turisme"` |
+| `fecha_ultima_transferencia` | `string\|null` ISO | `"2024-01-15"` |
+| `proxima_itv` | `string\|null` ISO | `"2028-08-08"` |
+
+---
+
+## Testing (Laravel)
+
+```php
+// tests/Unit/OcrServiceTest.php
 use Illuminate\Support\Facades\Http;
 
-class OcrServiceTest extends TestCase
+public function test_processar_dni_retorna_contracte_v1(): void
 {
-    public function test_health_check()
-    {
-        Http::fake([
-            '*/health' => Http::response([
-                'status' => 'healthy',
-                'services' => [
-                    'tesseract' => true,
-                    'google_vision' => true
-                ]
-            ], 200)
-        ]);
+    Http::fake([
+        '*/ocr/dni' => Http::response([
+            'valido'             => true,
+            'confianza_global'   => 99,
+            'tipo_documento'     => 'dni',
+            'datos' => [
+                'numero_documento' => '77612097T',
+                'nombre'           => 'JOAQUIN',
+                'apellidos'        => 'COLL CEREZO',
+                'fecha_nacimiento' => '1973-01-24',
+                'fecha_caducidad'  => '2028-08-28',
+                'sexo'             => 'M',
+            ],
+            'alertas'            => [],
+            'errores_detectados' => [],
+            'raw'  => ['ocr_engine' => 'google_vision', 'ocr_confidence' => 95.0],
+            'meta' => ['success' => true, 'message' => 'Document processat correctament'],
+        ], 200),
+    ]);
 
-        $ocrService = new OcrService();
-        $health = $ocrService->healthCheck();
+    $service = app(OcrService::class);
+    $result  = $service->processarDNI('/tmp/test_dni.jpg');
 
-        $this->assertNotNull($health);
-        $this->assertEquals('healthy', $health['status']);
-    }
-
-    public function test_processar_dni_success()
-    {
-        Http::fake([
-            '*/ocr/dni' => Http::response([
-                'success' => true,
-                'data' => [
-                    'dni' => '12345678A',
-                    'nom_complet' => 'TEST USER',
-                    'confidence' => 95.0
-                ]
-            ], 200)
-        ]);
-
-        $ocrService = new OcrService();
-
-        // Crear fitxer temporal de test
-        $testFile = __DIR__ . '/../fixtures/dni_test.jpg';
-
-        $result = $ocrService->processarDNI($testFile);
-
-        $this->assertNotNull($result);
-        $this->assertEquals('12345678A', $result['dni']);
-        $this->assertEquals('TEST USER', $result['nom_complet']);
-    }
-}
-```
-
----
-
-## Best Practices
-
-### 1. Validació d'imatges abans d'enviar
-
-```php
-public function validarImatgeDNI(UploadedFile $file): bool
-{
-    // Validar mida
-    if ($file->getSize() > 10 * 1024 * 1024) { // 10MB
-        return false;
-    }
-
-    // Validar tipus MIME
-    $allowedMimes = ['image/jpeg', 'image/jpg', 'image/png'];
-    if (!in_array($file->getMimeType(), $allowedMimes)) {
-        return false;
-    }
-
-    // Validar dimensions mínimes
-    $imageInfo = getimagesize($file->getRealPath());
-    if ($imageInfo[0] < 800 || $imageInfo[1] < 600) {
-        return false; // massa petita
-    }
-
-    return true;
-}
-```
-
-### 2. Cache de resultats
-
-```php
-use Illuminate\Support\Facades\Cache;
-
-public function processarDNIAmbCache($file)
-{
-    // Generar hash del fitxer
-    $fileHash = md5_file($file instanceof UploadedFile ?
-        $file->getRealPath() : $file);
-
-    // Comprovar cache (24h)
-    $cacheKey = "ocr:dni:{$fileHash}";
-
-    return Cache::remember($cacheKey, now()->addDay(), function () use ($file) {
-        return $this->ocrService->processarDNI($file);
-    });
-}
-```
-
-### 3. Processar de manera asíncrona (Job)
-
-```php
-<?php
-
-namespace App\Jobs;
-
-use App\Services\OcrService;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Queue\SerializesModels;
-
-class ProcessarDNIJob implements ShouldQueue
-{
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
-
-    public int $clientId;
-    public string $imagePath;
-
-    public function __construct(int $clientId, string $imagePath)
-    {
-        $this->clientId = $clientId;
-        $this->imagePath = $imagePath;
-    }
-
-    public function handle(OcrService $ocrService)
-    {
-        $dniData = $ocrService->processarDNI($this->imagePath);
-
-        if ($dniData) {
-            // Actualitzar client amb dades del DNI
-            Client::find($this->clientId)->update([
-                'dni' => $dniData['dni'] ?? null,
-                'nom_complet' => $dniData['nom_complet'] ?? null,
-                'data_naixement' => $dniData['data_naixement'] ?? null,
-                'adreca' => $dniData['adreca_completa'] ?? null,
-            ]);
-        }
-    }
+    $this->assertNotNull($result);
+    $this->assertTrue($result['valido']);
+    $this->assertEquals(99, $result['confianza_global']);
+    $this->assertEquals('77612097T', $result['datos']['numero_documento']);
+    $this->assertEquals('1973-01-24', $result['datos']['fecha_nacimiento']);
 }
 
-// Utilitzar-lo:
-ProcessarDNIJob::dispatch($clientId, $imagePath);
-```
-
-### 4. Retry automàtic en cas d'error
-
-```php
-public function processarDNIAmbRetry($file, int $maxRetries = 3)
+public function test_processar_dni_error_http_retorna_null(): void
 {
-    $attempt = 0;
+    Http::fake(['*/ocr/dni' => Http::response(['detail' => 'Timeout'], 504)]);
 
-    while ($attempt < $maxRetries) {
-        $result = $this->ocrService->processarDNI($file);
+    $result = app(OcrService::class)->processarDNI('/tmp/test.jpg');
 
-        if ($result) {
-            return $result;
-        }
-
-        $attempt++;
-
-        if ($attempt < $maxRetries) {
-            // Esperar progressivament més temps entre intents
-            sleep(pow(2, $attempt)); // 2s, 4s, 8s
-        }
-    }
-
-    return null;
+    $this->assertNull($result);
 }
 ```
 
@@ -741,46 +461,24 @@ public function processarDNIAmbRetry($file, int $maxRetries = 3)
 
 ## Troubleshooting
 
-### Problema: Timeout
-
-```php
-// Augmentar timeout per imatges grans
-$this->ocrService->timeout = 60; // 60 segons
-```
-
-### Problema: API Key invàlida
+| Problema | Causa probable | Solució |
+|----------|----------------|---------|
+| Retorna `null` | Error de connexió o timeout | Verificar `OCR_AGENT_URL` i augmentar `OCR_AGENT_TIMEOUT` |
+| `valido: false` + `DNI_EXPIRED` | Document caducat | Informar l'usuari que renovi el document |
+| `valido: false` + `VEH_PLATE_INVALID` | Matrícula llegida incorrectament | Provar amb `preprocess=true&preprocess_mode=aggressive` |
+| `confianza_global` baix (< 70) | Imatge de baixa qualitat | Demanar foto amb més llum o millor resolució |
+| HTTP 413 | Imatge > 5 MB | Redimensionar al client abans d'enviar |
+| HTTP 504 | L'OCR ha trigat > 30 s | Reintentar; si persiteix, verificar estat servei |
 
 ```bash
-# Verificar que l'API key és correcta
+# Verificar estat del servei
+curl https://ocr-production-abec.up.railway.app/health
+
+# Test ràpid des de terminal
 php artisan tinker
->>> config('services.ocr_agent.api_key')
-```
-
-### Problema: Servei no disponible
-
-```php
-// Comprovar health
-$health = app(OcrService::class)->healthCheck();
-dd($health);
+>>> app(\App\Services\OcrService::class)->healthCheck()
 ```
 
 ---
 
-## Resum configuració ràpida
-
-1. **Afegir variables d'entorn** a Railway (GoGestor):
-   - `OCR_AGENT_URL=https://ocr-production-abec.up.railway.app`
-   - `OCR_AGENT_API_KEY=your-ocr-agent-api-key-here`
-
-2. **Crear `OcrService.php`** amb el codi proporcionat
-
-3. **Utilitzar al controller**:
-   ```php
-   $dniData = app(OcrService::class)->processarDNI($request->file('dni'));
-   ```
-
-4. **Validar resultats** abans de guardar a BD
-
----
-
-**Documentació completa**: [API.md](./API.md)
+**Documentació completa**: [docs/API.md](./API.md)

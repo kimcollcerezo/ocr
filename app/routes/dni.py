@@ -1,93 +1,182 @@
 """
-Ruta per processar DNI
+Ruta per processar DNI/NIE — Contracte unificat v1
 """
+import asyncio
+import logging
+import tempfile
+import os
+import time
 from fastapi import APIRouter, File, UploadFile, HTTPException, Query
-from app.models.dni_response import DNIResponse, DNIData
+from fastapi.concurrency import run_in_threadpool
+from app.models.dni_response import DNIValidationResponse
 from app.services.tesseract_service import tesseract_service
 from app.services.google_vision_service import google_vision_service
 from app.services.image_processor import image_processor
 from app.parsers.dni_parser import dni_parser
-import tempfile
-import os
+
+log = logging.getLogger("ocr.dni")
+
+_tesseract_semaphore = asyncio.Semaphore(2)
+
+OCR_TIMEOUT_SECONDS = 30
+MAX_FILE_SIZE = 5 * 1024 * 1024
+VALID_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+_MAGIC = {
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG":      "image/png",
+    b"RIFF":         "image/webp",
+}
+
+
+def _detect_image_type(content: bytes) -> str | None:
+    for magic, mime in _MAGIC.items():
+        if content[: len(magic)] == magic:
+            return mime
+    return None
+
 
 router = APIRouter()
 
 
-@router.post("/dni", response_model=DNIResponse)
+@router.post("/dni", response_model=DNIValidationResponse)
 async def process_dni(
     file: UploadFile = File(...),
-    preprocess: bool = Query(default=True, description="Pre-processar imatge per millorar OCR"),
-    preprocess_mode: str = Query(default="standard", description="Mode: standard, aggressive, document")
+    preprocess: bool = Query(default=False, description="Pre-processar imatge per millorar OCR"),
+    preprocess_mode: str = Query(default="standard", description="Mode: standard, aggressive, document"),
 ):
     """
-    Processa un DNI (frontal o posterior) i extreu les dades
+    Processa un DNI/NIE i retorna validació experta (contracte unificat v1).
 
-    - **file**: Imatge del DNI (JPG, PNG)
+    - **file**: Imatge del DNI (JPG, PNG, WEBP)
 
-    Returns:
-        DNIResponse amb les dades extretes
+    Sistema de doble passada — 1 sol crèdit Vision per document:
+    - Phase 1: extracció raw (regex Python)
+    - Phase 2: validació creuada + codis normalitzats (Python pur, 0 crèdits)
     """
-    # Validar fitxer
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="El fitxer ha de ser una imatge")
+    if file.content_type not in VALID_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Format no suportat. Acceptem JPG, PNG o WEBP.")
 
-    # Guardar temporalment
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-        content = await file.read()
-        temp_file.write(content)
-        temp_path = temp_file.name
+    content = await file.read()
+
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail=f"Imatge massa gran. Màxim {MAX_FILE_SIZE // 1024 // 1024}MB.")
+
+    if _detect_image_type(content) is None:
+        raise HTTPException(status_code=400, detail="El fitxer no és una imatge vàlida.")
+
+    temp_path: str | None = None
+    ocr_input_path: str | None = None
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        tmp.write(content)
+        temp_path = tmp.name
+    del content
 
     try:
-        # Pre-processar imatge si cal
         ocr_input_path = temp_path
         if preprocess:
             try:
-                ocr_input_path = image_processor.process_for_ocr(
-                    temp_path,
-                    mode=preprocess_mode
-                )
-            except Exception as e:
-                print(f"⚠️  Error pre-processant imatge: {e}")
-                # Si falla, usar imatge original
+                ocr_input_path = image_processor.process_for_ocr(temp_path, mode=preprocess_mode)
+            except Exception:
+                log.warning("preprocess_failed")
                 ocr_input_path = temp_path
 
-        # OCR amb Google Vision (millor precisió)
-        if not google_vision_service.is_available():
-            raise HTTPException(
-                status_code=503,
-                detail="Google Vision no disponible"
+        # --- INTENT 1: Tesseract (gratuït) ---
+        result: DNIValidationResponse | None = None
+
+        if tesseract_service.is_available():
+            try:
+                t0 = time.monotonic()
+                async with _tesseract_semaphore:
+                    tess_result = await asyncio.wait_for(
+                        run_in_threadpool(tesseract_service.detect_text, ocr_input_path),
+                        timeout=OCR_TIMEOUT_SECONDS,
+                    )
+                tess_ms = round((time.monotonic() - t0) * 1000)
+                tess_data, raw_mrz = dni_parser.parse(tess_result["text"])
+                tess_confidence = tess_result["confidence"]
+
+                cal_fallback, motiu = dni_parser.should_fallback_to_vision(tess_data, tess_confidence)
+
+                if not cal_fallback:
+                    result = dni_parser.validate_and_build_response(
+                        tess_data, raw_mrz, "tesseract", tess_confidence
+                    )
+                    log.info("ocr_tesseract_ok", extra={
+                        "doc_redacted": _redact(result.datos.numero_documento),
+                        "confianza": result.confianza_global,
+                        "valido": result.valido,
+                        "durada_ms": tess_ms,
+                        "confidence": round(tess_confidence, 1),
+                    })
+                else:
+                    log.info("ocr_tesseract_fallback", extra={
+                        "motiu": motiu,
+                        "durada_ms": tess_ms,
+                        "confidence": round(tess_confidence, 1),
+                    })
+            except asyncio.TimeoutError:
+                log.warning("ocr_tesseract_timeout")
+            except Exception as e:
+                log.warning("ocr_tesseract_error", extra={"error_type": type(e).__name__})
+
+        # --- INTENT 2: Google Vision (fallback) ---
+        if result is None:
+            if not google_vision_service.is_available():
+                raise HTTPException(status_code=503, detail="Cap motor OCR disponible")
+
+            t0 = time.monotonic()
+            vision_result = await asyncio.wait_for(
+                run_in_threadpool(google_vision_service.detect_document_text, ocr_input_path),
+                timeout=OCR_TIMEOUT_SECONDS,
             )
-
-        ocr_result = google_vision_service.detect_document_text(ocr_input_path)
-
-        # Parser DNI
-        dni_data = dni_parser.parse(ocr_result["text"])
-        dni_data.confidence = ocr_result["confidence"]
-        dni_data.ocr_engine = "google_vision"
-
-        # Verificar que s'ha extret alguna dada
-        if not dni_data.dni and not dni_data.nom:
-            return DNIResponse(
-                success=False,
-                message="No s'han pogut extreure dades del DNI",
-                data=dni_data
+            vision_ms = round((time.monotonic() - t0) * 1000)
+            vision_data, raw_mrz = dni_parser.parse(vision_result["text"])
+            result = dni_parser.validate_and_build_response(
+                vision_data, raw_mrz, "google_vision", vision_result["confidence"]
             )
+            log.info("ocr_vision_used", extra={
+                "doc_redacted": _redact(result.datos.numero_documento),
+                "confianza": result.confianza_global,
+                "valido": result.valido,
+                "errors": len(result.errores_detectados),
+                "alerts": len(result.alertas),
+                "durada_ms": vision_ms,
+                "confidence": round(vision_result["confidence"], 1),
+            })
 
-        return DNIResponse(
-            success=True,
-            message="DNI processat correctament",
-            data=dni_data
-        )
+        # TODO: si result.confianza_global < 85 → Claude text-only per refinament
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processant DNI: {str(e)}"
-        )
+        log.info("ocr_success", extra={
+            "doc_redacted": _redact(result.datos.numero_documento),
+            "confianza": result.confianza_global,
+            "valido": result.valido,
+            "engine": result.raw.ocr_engine,
+        })
+        return result
+
+    except HTTPException:
+        raise
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Timeout processant el document.")
+    except Exception:
+        log.exception("ocr_unexpected_error")
+        raise HTTPException(status_code=500, detail="Error intern processant el document.")
 
     finally:
-        # Netejar fitxers temporals
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        if preprocess and ocr_input_path != temp_path and os.path.exists(ocr_input_path):
-            os.unlink(ocr_input_path)
+        def _unlink(path: str | None) -> None:
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        _unlink(temp_path)
+        if ocr_input_path != temp_path:
+            _unlink(ocr_input_path)
+
+
+def _redact(doc: str | None) -> str:
+    if not doc or len(doc) < 3:
+        return "***"
+    return doc[:4] + "****" + doc[-1]
