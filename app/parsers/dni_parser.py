@@ -630,6 +630,14 @@ class DNIParser:
         if sembla_posterior and no_te_adreca and tess_confidence < 70:
             return True, "posterior_sense_adreca"
 
+        # Si text molt curt (< 200 chars) amb MRZ però sense camps frontal típics, és posterior mal llegit
+        frontal_keywords = ["APELLIDOS", "COGNOMS", "SEXO", "SEXE", "NACIONALIDAD", "NACIONALITAT"]
+        te_frontal = any(kw in text_upper for kw in frontal_keywords)
+        te_mrz = "IDESP" in text or "<<<" in text
+
+        if te_mrz and not te_frontal and len(text) < 250 and tess_confidence < 70:
+            return True, "mrz_sols_posterior_mal_llegit"
+
         # Estimació de qualitat ràpida: comptar camps principals
         principals = [data.numero_documento, data.nombre, data.apellidos,
                       data.fecha_nacimiento, data.fecha_caducidad]
