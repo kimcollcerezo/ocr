@@ -164,12 +164,17 @@ async def process_dni(
         })
 
         # 🔍 LOG TEMPORAL: Resposta enviada
+        te_mrz = result.datos.mrz is not None
+        te_adreca = result.datos.domicilio or result.datos.municipio or result.datos.provincia
         log.info("🔍 DNI RESPONSE", extra={
             "doc_redacted": _redact(result.datos.numero_documento),
             "domicilio": result.datos.domicilio,
             "municipio": result.datos.municipio,
             "provincia": result.datos.provincia,
             "codigo_postal": result.datos.codigo_postal,
+            "te_mrz": te_mrz,
+            "te_adreca": bool(te_adreca),
+            "tipus_dni": "posterior" if te_mrz or te_adreca else "frontal",
             "contracte": "v1",
             "valido": result.valido,
             "confianza": result.confianza_global,
