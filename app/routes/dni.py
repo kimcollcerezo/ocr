@@ -91,70 +91,29 @@ async def process_dni(
                 log.warning("preprocess_failed")
                 ocr_input_path = temp_path
 
-        # --- INTENT 1: Tesseract (gratuït) ---
-        result: DNIValidationResponse | None = None
+        # --- Google Vision OCR (únic motor) ---
+        if not google_vision_service.is_available():
+            raise HTTPException(status_code=503, detail="Motor OCR no disponible")
 
-        if tesseract_service.is_available():
-            try:
-                t0 = time.monotonic()
-                async with _tesseract_semaphore:
-                    tess_result = await asyncio.wait_for(
-                        run_in_threadpool(tesseract_service.detect_text, ocr_input_path),
-                        timeout=OCR_TIMEOUT_SECONDS,
-                    )
-                tess_ms = round((time.monotonic() - t0) * 1000)
-                tess_text = tess_result["text"]
-                tess_data, raw_mrz = dni_parser.parse(tess_text)
-                tess_confidence = tess_result["confidence"]
-
-                cal_fallback, motiu = dni_parser.should_fallback_to_vision(tess_data, tess_confidence, tess_text)
-
-                if not cal_fallback:
-                    result = dni_parser.validate_and_build_response(
-                        tess_data, raw_mrz, "tesseract", tess_confidence
-                    )
-                    log.info("ocr_tesseract_ok", extra={
-                        "doc_redacted": _redact(result.datos.numero_documento),
-                        "confianza": result.confianza_global,
-                        "valido": result.valido,
-                        "durada_ms": tess_ms,
-                        "confidence": round(tess_confidence, 1),
-                    })
-                else:
-                    log.info("ocr_tesseract_fallback", extra={
-                        "motiu": motiu,
-                        "durada_ms": tess_ms,
-                        "confidence": round(tess_confidence, 1),
-                    })
-            except asyncio.TimeoutError:
-                log.warning("ocr_tesseract_timeout")
-            except Exception as e:
-                log.warning("ocr_tesseract_error", extra={"error_type": type(e).__name__})
-
-        # --- INTENT 2: Google Vision (fallback) ---
-        if result is None:
-            if not google_vision_service.is_available():
-                raise HTTPException(status_code=503, detail="Cap motor OCR disponible")
-
-            t0 = time.monotonic()
-            vision_result = await asyncio.wait_for(
-                run_in_threadpool(google_vision_service.detect_document_text, ocr_input_path),
-                timeout=OCR_TIMEOUT_SECONDS,
-            )
-            vision_ms = round((time.monotonic() - t0) * 1000)
-            vision_data, raw_mrz = dni_parser.parse(vision_result["text"])
-            result = dni_parser.validate_and_build_response(
-                vision_data, raw_mrz, "google_vision", vision_result["confidence"]
-            )
-            log.info("ocr_vision_used", extra={
-                "doc_redacted": _redact(result.datos.numero_documento),
-                "confianza": result.confianza_global,
-                "valido": result.valido,
-                "errors": len(result.errores_detectados),
-                "alerts": len(result.alertas),
-                "durada_ms": vision_ms,
-                "confidence": round(vision_result["confidence"], 1),
-            })
+        t0 = time.monotonic()
+        vision_result = await asyncio.wait_for(
+            run_in_threadpool(google_vision_service.detect_document_text, ocr_input_path),
+            timeout=OCR_TIMEOUT_SECONDS,
+        )
+        vision_ms = round((time.monotonic() - t0) * 1000)
+        vision_data, raw_mrz = dni_parser.parse(vision_result["text"])
+        result = dni_parser.validate_and_build_response(
+            vision_data, raw_mrz, "google_vision", vision_result["confidence"]
+        )
+        log.info("ocr_vision_used", extra={
+            "doc_redacted": _redact(result.datos.numero_documento),
+            "confianza": result.confianza_global,
+            "valido": result.valido,
+            "errors": len(result.errores_detectados),
+            "alerts": len(result.alertas),
+            "durada_ms": vision_ms,
+            "confidence": round(vision_result["confidence"], 1),
+        })
 
         # TODO: si result.confianza_global < 85 → Claude text-only per refinament
 
