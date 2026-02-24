@@ -54,17 +54,19 @@ async def process_dni(
     - Phase 1: extracció raw (regex Python)
     - Phase 2: validació creuada + codis normalitzats (Python pur, 0 crèdits)
     """
+    content = await file.read()
+
     # 🔍 LOG TEMPORAL: Petició rebuda
     log.info("🔍 DNI REQUEST", extra={
         "uploaded_filename": file.filename,
         "mime_type": file.content_type,
+        "file_size_bytes": len(content),
+        "file_size_kb": round(len(content) / 1024, 2),
         "preprocess_enabled": preprocess,
     })
 
     if file.content_type not in VALID_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Format no suportat. Acceptem JPG, PNG o WEBP.")
-
-    content = await file.read()
 
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail=f"Imatge massa gran. Màxim {MAX_FILE_SIZE // 1024 // 1024}MB.")
