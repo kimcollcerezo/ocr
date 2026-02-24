@@ -291,6 +291,17 @@ class DNIParser:
                     # Primera línia: domicilio (carrer + número)
                     data.domicilio = adreca_lines[0]
 
+                    # Separar carrer i número (ex: "C. ARTAIL 9" → calle="C. ARTAIL", numero="9")
+                    if data.domicilio:
+                        # Buscar número al final (amb/sense coma): "CRER. VENDRELL, 5" o "C. ARTAIL 9"
+                        numero_match = re.search(r"[,\s]+(\d+[A-Z]?)\s*$", data.domicilio)
+                        if numero_match:
+                            data.numero = numero_match.group(1).strip()
+                            data.calle = data.domicilio[:numero_match.start()].strip()
+                        else:
+                            # Si no hi ha número, tot és carrer
+                            data.calle = data.domicilio
+
                     # Buscar codi postal (5 dígits) en TOTES les línies
                     for line in adreca_lines:
                         cp_match = re.search(r"\b(\d{5})\b", line)
@@ -404,7 +415,7 @@ class DNIParser:
                 ft_data = DNIParser.parse_full_text(text)
 
                 # Copiar camps addicionals que MRZ no té
-                for attr in ("domicilio", "municipio", "provincia", "lugar_nacimiento",
+                for attr in ("domicilio", "calle", "numero", "municipio", "provincia", "lugar_nacimiento",
                              "nombre_padre", "nombre_madre"):
                     if getattr(ft_data, attr):
                         setattr(mrz_data, attr, getattr(ft_data, attr))

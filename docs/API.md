@@ -253,7 +253,9 @@ Content-Type: multipart/form-data
 | `fecha_nacimiento` | `string \| null` | Frontal / MRZ | Format ISO `YYYY-MM-DD` |
 | `fecha_expedicion` | `string \| null` | Frontal | Format ISO `YYYY-MM-DD` |
 | `fecha_caducidad` | `string \| null` | Frontal / MRZ | Format ISO `YYYY-MM-DD` |
-| `domicilio` | `string \| null` | Posterior | Adreça completa |
+| `domicilio` | `string \| null` | Posterior | Adreça completa (deprecated, usa `calle` + `numero`) |
+| `calle` | `string \| null` | Posterior | Nom del carrer (ex: "C. ARTAIL", "CRER. VENDRELL") |
+| `numero` | `string \| null` | Posterior | Número del carrer (ex: "9", "5") |
 | `municipio` | `string \| null` | Posterior | Municipi |
 | `provincia` | `string \| null` | Posterior | Província |
 | `codigo_postal` | `string \| null` | Posterior | Codi postal |
