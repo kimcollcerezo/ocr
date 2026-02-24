@@ -54,19 +54,10 @@ async def process_dni(
     - Phase 1: extracció raw (regex Python)
     - Phase 2: validació creuada + codis normalitzats (Python pur, 0 crèdits)
     """
-    content = await file.read()
-
-    # 🔍 LOG TEMPORAL: Petició rebuda
-    log.info("🔍 DNI REQUEST", extra={
-        "uploaded_filename": file.filename,
-        "mime_type": file.content_type,
-        "file_size_bytes": len(content),
-        "file_size_kb": round(len(content) / 1024, 2),
-        "preprocess_enabled": preprocess,
-    })
-
     if file.content_type not in VALID_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Format no suportat. Acceptem JPG, PNG o WEBP.")
+
+    content = await file.read()
 
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail=f"Imatge massa gran. Màxim {MAX_FILE_SIZE // 1024 // 1024}MB.")
@@ -123,24 +114,6 @@ async def process_dni(
             "valido": result.valido,
             "engine": result.raw.ocr_engine,
         })
-
-        # 🔍 LOG TEMPORAL: Resposta enviada
-        te_mrz = result.datos.mrz is not None
-        te_adreca = result.datos.domicilio or result.datos.municipio or result.datos.provincia
-        log.info("🔍 DNI RESPONSE", extra={
-            "doc_redacted": _redact(result.datos.numero_documento),
-            "domicilio": result.datos.domicilio,
-            "municipio": result.datos.municipio,
-            "provincia": result.datos.provincia,
-            "codigo_postal": result.datos.codigo_postal,
-            "te_mrz": te_mrz,
-            "te_adreca": bool(te_adreca),
-            "tipus_dni": "posterior" if te_mrz or te_adreca else "frontal",
-            "contracte": "v1",
-            "valido": result.valido,
-            "confianza": result.confianza_global,
-        })
-
         return result
 
     except HTTPException:
