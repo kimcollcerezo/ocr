@@ -236,8 +236,13 @@ class DocumentController extends Controller
                 'fecha_caducidad'  => $datos['fecha_caducidad'],  // YYYY-MM-DD
                 'sexo'             => $datos['sexo'],             // M | F | X
                 'nacionalidad'     => $datos['nacionalidad'],
-                'domicilio'        => $datos['domicilio'],
-                'municipio'        => $datos['municipio'],
+                // Adreça (camps separats)
+                'calle'            => $datos['calle'],            // "CRER. SALVADOR ESPRIU"
+                'numero'           => $datos['numero'],           // "45"
+                'piso_puerta'      => $datos['piso_puerta'],      // "P02 0001" | "1º A" | null
+                'codigo_postal'    => $datos['codigo_postal'],    // "08328"
+                'municipio'        => $datos['municipio'],        // "VILASSAR DE DALT"
+                'provincia'        => $datos['provincia'],        // "BARCELONA"
             ]
         );
 
@@ -382,9 +387,24 @@ function avaluarOcr(array $resultat): string
 | `nacionalidad` | `string\|null` | `"ESP"` |
 | `fecha_nacimiento` | `string\|null` ISO | `"1973-01-24"` |
 | `fecha_caducidad` | `string\|null` ISO | `"2028-08-28"` |
-| `domicilio` | `string\|null` | `"CARRER VENDRELL 5"` |
-| `municipio` | `string\|null` | `"CABRILS"` |
+| `domicilio` | `string\|null` | `"CARRER VENDRELL 5"` (deprecated) |
+| `calle` | `string\|null` | `"CRER. SALVADOR ESPRIU"` |
+| `numero` | `string\|null` | `"45"` |
+| `piso_puerta` | `string\|null` | `"P02 0001"`, `"1º A"`, `"2n B"` |
+| `municipio` | `string\|null` | `"VILASSAR DE DALT"` |
 | `provincia` | `string\|null` | `"BARCELONA"` |
+| `codigo_postal` | `string\|null` | `"08328"` |
+
+**Notes sobre l'adreça:**
+- **`domicilio`** (deprecated): Adreça completa en un sol camp. Usar `calle`, `numero`, `piso_puerta` en el seu lloc.
+- **`calle`**: Nom del carrer sense número (ex: "CRER. SALVADOR ESPRIU", "C. ARTAIL")
+- **`numero`**: Número del carrer (ex: "45", "9", "5B")
+- **`piso_puerta`**: Pis i porta tal com apareix al DNI. Formats habituals:
+  - `"P02 0001"` o `"PO2 0001"` → Pis 02, Porta 0001
+  - `"1º A"` o `"1ª B"` → Primer pis, porta A/B
+  - `"ESC A 2n 3ª"` → Escala A, 2n pis, porta 3ª
+  - `null` si no hi ha pis/porta al DNI
+- **Reconstruir adreça completa**: `"{calle} {numero} {piso_puerta}, {codigo_postal} {municipio}, {provincia}"`
 
 ### Permís (`datos`)
 

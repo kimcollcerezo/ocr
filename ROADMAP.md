@@ -1,6 +1,6 @@
 # Roadmap — OCR Agent
 
-**Última actualització**: 2026-02-18
+**Última actualització**: 2026-02-24
 
 ---
 
@@ -11,8 +11,9 @@
 | Funcionalitat | Estat | Notes |
 |---------------|-------|-------|
 | Parser DNI/NIE (frontal + posterior) | ✅ | MRZ + full-text, check digit, NIE X/Y/Z |
+| Camps `calle`, `numero` i `piso_puerta` separats | ✅ | DNI posterior, auto-split adreça amb pis/porta |
 | Parser Permís de Circulació | ✅ | Codis EU D.1, P.1, C.1.x, VIN, matrícula |
-| Tesseract-first → Vision fallback | ✅ | 1 sol crèdit Vision per document |
+| Google Vision (únic motor OCR) | ✅ | 50% més ràpid (~630ms), Tesseract eliminat |
 | Contracte unificat v1 | ✅ | `valido`, `confianza_global`, `ValidationItem` |
 | Dates ISO 8601 (YYYY-MM-DD) | ✅ | Tots els endpoints |
 | JSON structured logging | ✅ | `ts`, `level`, `logger`, `durada_ms`... |
@@ -26,35 +27,62 @@
 
 ## Prioritat Alta — Pròxims passos
 
-### 1. Actualitzar OcrService.php (GoGestor)
+### 1. 🚀 Migració de Railway → Google Cloud Platform
 
-El servei de client PHP a GoGestor usa el format antic (`success/data`, camps en català).
-Cal actualitzar-lo al contracte v1 (`valido`, `datos.numero_documento`, dates ISO).
-**Veure**: `docs/GOGESTOR_INTEGRATION.md`
+**Objectiu**: Desplegar l'agent OCR a Google Cloud en comptes de Railway
 
-**Esforç estimat**: 2-4 hores · **Impacte**: Bloquejant per a integració GoGestor
+**Per què?**
+- ✅ **Mateix ecosistema** que Google Vision (millor integració)
+- ✅ **Menys latència** (APIs internes de Google Cloud)
+- ✅ **Millor pricing** per a volums alts
+- ✅ **Escalabilitat automàtica** (Cloud Run)
+- ✅ **Més control** sobre infraestructura i logs
+
+**Opcions de desplegament:**
+
+| Servei | Pros | Contras | Recomanat |
+|--------|------|---------|-----------|
+| **Cloud Run** | Serverless, autoscaling, pay-per-use | Cold starts | ✅ **SÍ** |
+| App Engine | Managed, zero config | Menys flexible | No |
+| Compute Engine | Control total | Gestió manual | No |
+
+**Tasques:**
+1. Crear projecte GCP (o usar `gogestor-ocr-485718` existent)
+2. `Dockerfile` optimitzat per Cloud Run
+3. Configurar Cloud Build (auto-deploy des de GitHub)
+4. Variables d'entorn (`GOOGLE_CLOUD_CREDENTIALS_JSON`)
+5. Configurar custom domain
+6. Health checks i monitoring
+
+**Esforç estimat**: 1 dia · **Prioritat**: 🔥 **ALTA**
 
 ---
 
-### 2. Sistema de tracking d'ús
+### 2. ~~Actualitzar OcrService.php (GoGestor)~~
+
+✅ **En curs** - GoGestor ja està integrant el contracte v1
+
+---
+
+### 3. Sistema de tracking d'ús
 
 **Objectiu**: Saber quants documents processa cada projecte i calcular costos reals.
 
-El middleware de logging ja escriu JSON a `/tmp/ocr_server.log`. El pas següent és
-persistir les mètriques (motor OCR usat, `durada_ms`, `valido`) per projecte.
+El middleware de logging ja escriu JSON. El pas següent és persistir les mètriques
+(motor OCR usat, `durada_ms`, `valido`) per projecte.
 
-**Implementació mínima (SQLite)**:
+**Implementació mínima (SQLite o Cloud SQL)**:
 
 ```
 ocr_usage.db
 ├── timestamp
 ├── project_id      (header X-Project-ID)
 ├── document_type   (dni | permiso_circulacion)
-├── ocr_engine      (tesseract | google_vision)
+├── ocr_engine      (google_vision)
 ├── confianza_global
 ├── valido
 ├── durada_ms
-└── cost_usd        (calculat: Vision $0.0015/doc, Tesseract $0)
+└── cost_usd        (calculat: Vision $0.0015/doc)
 ```
 
 Nous endpoints: `GET /metrics/usage`, `GET /metrics/costs`
@@ -63,7 +91,7 @@ Nous endpoints: `GET /metrics/usage`, `GET /metrics/costs`
 
 ---
 
-### 3. Passaport espanyol
+### 4. Passaport espanyol
 
 Estructura similar al DNI però amb MRZ de 2 línies (TD3):
 - Número de passaport (format `AAA000000`)
@@ -74,7 +102,7 @@ Estructura similar al DNI però amb MRZ de 2 línies (TD3):
 
 ---
 
-### 4. Permís de conduir espanyol
+### 5. Permís de conduir espanyol
 
 Camps: número permís, data expedició/caducitat, classes (A, B, C...), titular.
 Atenció: el format varia molt entre generacions.
@@ -85,7 +113,7 @@ Atenció: el format varia molt entre generacions.
 
 ## Prioritat Mitjana
 
-### 5. Endpoint `/ocr/auto` — Detecció automàtica de document
+### 6. Endpoint `/ocr/auto` — Detecció automàtica de document
 
 ```http
 POST /ocr/auto
@@ -99,9 +127,9 @@ que el client hagi de saber el tipus prèviament.
 
 ---
 
-### 6. Refinament Claude text-only (confiança < 85)
+### 7. Refinament Claude text-only (confiança < 85)
 
-**TODO** ja marcat al codi (`permis.py:146`, `dni.py:149`):
+**TODO** ja marcat al codi:
 
 ```python
 # TODO: si result.confianza_global < 85 → Claude text-only per refinament
@@ -114,7 +142,7 @@ OCR extret (no la imatge) a Claude per corregir/completar camps.
 
 ---
 
-### 7. Documents internacionals
+### 8. Documents internacionals
 
 - Passaports internacionals (MRZ TD3 universal)
 - ID Cards europees (MRZ TD1/TD2)
@@ -124,30 +152,30 @@ OCR extret (no la imatge) a Claude per corregir/completar camps.
 
 ## Prioritat Baixa
 
-### 8. Cache de resultats
+### 9. Cache de resultats
 
 Evitar processar la mateixa imatge dues vegades:
 - Hash SHA-256 de la imatge com a clau
 - TTL 24h
-- Storage: Redis o SQLite
+- Storage: Redis, Cloud Memorystore o SQLite
 
 **Cost estimat Vision sense cache** (1000 docs/mes): ~$1.5/mes
 **Millora potencial**: 10-20% si els usuaris pugen la mateixa imatge
 
 ---
 
-### 9. Documents empresarials
+### 10. Documents empresarials
 
 - **Factures**: número, import, IVA, data, proveïdor
 - **Albarans**: número, productes, quantitats
 - **Contractes**: dates, parts contractants (extracció parcial)
 
 Requereix un enfocament diferent (documents variables, no formularis fixos).
-Candidat ideal per al **refinament Claude text-only** (punt 6).
+Candidat ideal per al **refinament Claude text-only** (punt 7).
 
 ---
 
-### 10. Dashboard d'estadístiques
+### 11. Dashboard d'estadístiques
 
 ```
 GET /dashboard
@@ -169,22 +197,23 @@ Primer 1.000 docs/mes:  GRATUÏT
 1.001 – 5.000.000:      $1.50 per 1.000 docs  ($0.0015/doc)
 5.000.001+:             $0.60 per 1.000 docs
 
-# Estalvi Tesseract
-Si Tesseract resol el 25% dels casos (DNI posterior amb MRZ net):
-  1.000 docs → 750 Vision + 250 Tesseract = $1.125 en lloc de $1.50
+# Arquitectura actual (només Vision)
+1.000 docs/mes:   $0 (dins quota gratuïta)
+2.000 docs/mes:   $1.50 (1.000 de pagament)
+10.000 docs/mes:  $13.50
 ```
 
 ---
 
 ## KPIs a mesurar
 
-| KPI | Objectiu |
-|-----|----------|
-| `confianza_global` mig | ≥ 90 |
-| Taxa `valido: true` | ≥ 95% |
-| Temps resposta mig | ≤ 5s |
-| % docs resolts per Tesseract | ≥ 20% (estalvi cost) |
-| Cost per 1.000 docs | ≤ $1.20 |
+| KPI | Objectiu | Actual |
+|-----|----------|--------|
+| `confianza_global` mig | ≥ 90 | ~95 ✅ |
+| Taxa `valido: true` | ≥ 95% | ~98% ✅ |
+| Temps resposta mig | ≤ 1s | ~0.6s ✅ |
+| Cost per 1.000 docs | ≤ $1.50 | $1.50 ✅ |
+| Uptime | ≥ 99% | - |
 
 ---
 

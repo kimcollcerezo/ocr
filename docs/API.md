@@ -218,9 +218,12 @@ Content-Type: multipart/form-data
     "fecha_expedicion": null,
     "fecha_caducidad": "2028-08-28",
     "domicilio": "CARRER VENDRELL 5",
+    "calle": "CARRER VENDRELL",
+    "numero": "5",
+    "piso_puerta": null,
     "municipio": "CABRILS",
     "provincia": "BARCELONA",
-    "codigo_postal": null,
+    "codigo_postal": "08348",
     "nombre_padre": null,
     "nombre_madre": null,
     "lugar_nacimiento": null,
@@ -253,9 +256,10 @@ Content-Type: multipart/form-data
 | `fecha_nacimiento` | `string \| null` | Frontal / MRZ | Format ISO `YYYY-MM-DD` |
 | `fecha_expedicion` | `string \| null` | Frontal | Format ISO `YYYY-MM-DD` |
 | `fecha_caducidad` | `string \| null` | Frontal / MRZ | Format ISO `YYYY-MM-DD` |
-| `domicilio` | `string \| null` | Posterior | Adreça completa (deprecated, usa `calle` + `numero`) |
+| `domicilio` | `string \| null` | Posterior | Adreça completa (deprecated, usa `calle` + `numero` + `piso_puerta`) |
 | `calle` | `string \| null` | Posterior | Nom del carrer (ex: "C. ARTAIL", "CRER. VENDRELL") |
 | `numero` | `string \| null` | Posterior | Número del carrer (ex: "9", "5") |
+| `piso_puerta` | `string \| null` | Posterior | Pis i porta (ex: "P02 0001", "1º A", "2n B") |
 | `municipio` | `string \| null` | Posterior | Municipi |
 | `provincia` | `string \| null` | Posterior | Província |
 | `codigo_postal` | `string \| null` | Posterior | Codi postal |
@@ -265,7 +269,15 @@ Content-Type: multipart/form-data
 | `soporte_numero` | `string \| null` | Posterior | Número de suport (rere) |
 | `mrz` | `object \| null` | Posterior (MRZ) | Dades MRZ per a validació creuada |
 
-> **Nota**: Totes les dates estan en format **ISO 8601** (`YYYY-MM-DD`). Les dates `null` signifiquen que no s'han pogut llegir de la imatge.
+> **Nota dates**: Totes les dates estan en format **ISO 8601** (`YYYY-MM-DD`). Les dates `null` signifiquen que no s'han pogut llegir de la imatge.
+
+> **Nota adreça**: L'adreça del DNI posterior es retorna en camps separats:
+> - `calle`: Nom del carrer (ex: "CRER. SALVADOR ESPRIU")
+> - `numero`: Número del carrer (ex: "45")
+> - `piso_puerta`: Pis i porta (ex: "P02 0001", "1º A", "2n B") o `null` si no consta
+> - `codigo_postal`, `municipio`, `provincia`: Completen l'adreça
+>
+> El camp `domicilio` conté l'adreça completa però està **deprecated**. Utilitzar els camps separats.
 
 ### Exemple de resposta completa (DNI vàlid)
 
@@ -286,6 +298,9 @@ Content-Type: multipart/form-data
     "fecha_expedicion": null,
     "fecha_caducidad": "2028-08-28",
     "domicilio": null,
+    "calle": null,
+    "numero": null,
+    "piso_puerta": null,
     "municipio": null,
     "provincia": null,
     "codigo_postal": null,
@@ -655,7 +670,10 @@ interface DNIDatos {
   fecha_nacimiento: string | null;   // YYYY-MM-DD
   fecha_expedicion: string | null;
   fecha_caducidad: string | null;
-  domicilio: string | null;
+  domicilio: string | null;          // Deprecated: usar calle + numero + piso_puerta
+  calle: string | null;
+  numero: string | null;
+  piso_puerta: string | null;
   municipio: string | null;
   provincia: string | null;
   codigo_postal: string | null;
