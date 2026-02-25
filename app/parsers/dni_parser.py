@@ -246,6 +246,13 @@ class DNIParser:
 
                 adreca_lines = []
 
+                # Filtrar falsos positius: si només captura "/ DOMICILI" o "/ DOMICILIO", ignorar-ho
+                if same_line_match:
+                    captured = same_line_match.group(1).strip()
+                    # Si el que hem capturat és només el keyword traduït (amb o sense barra), no és una adreça real
+                    if re.match(r"^/\s*(D[O0]MICILI[O0]?|DOMICILI?)$", captured, re.IGNORECASE):
+                        same_line_match = None
+
                 if same_line_match:
                     # Adreça a la mateixa línia! Dividir per espais múltiples o números de 5 dígits
                     rest_of_line = same_line_match.group(1).strip()
