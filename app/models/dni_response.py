@@ -41,6 +41,7 @@ class DNIDatos(BaseModel):
     domicilio: Optional[str] = None  # Adreça completa (deprecated, usa calle + numero)
     calle: Optional[str] = None  # Nom del carrer (ex: "C. ARTAIL", "CRER. VENDRELL")
     numero: Optional[str] = None  # Número del carrer (ex: "9", "5")
+    piso_puerta: Optional[str] = None  # Pis i porta (ex: "P02 0001", "1º A", "2n B")
     municipio: Optional[str] = None
     provincia: Optional[str] = None
     codigo_postal: Optional[str] = None

@@ -236,7 +236,7 @@ class DNIParser:
                         tokens = tokens[1:]
                     data.nombre = " ".join(tokens).strip() or None
 
-            elif re.search(r"D[O0]MICILI[O0]", lu) or "DOMICILI" in lu:  # Més flexible amb OCR errors
+            elif (re.search(r"D[O0]MICILI[O0]", lu) or "DOMICILI" in lu) and "LUGAR" not in lu and "LLOC" not in lu:  # Només DOMICILIO, no LUGAR DE DOMICILIO
                 # Comprovar si l'adreça està a la MATEIXA línia (després de DOMICILIO/DOMICILI)
                 same_line_match = re.search(r"D[O0]MICILI[O0]/D[O0]MICILI\s+(.+)$", lines[i], re.IGNORECASE)
                 if not same_line_match:
@@ -246,11 +246,12 @@ class DNIParser:
 
                 adreca_lines = []
 
-                # Filtrar falsos positius: si només captura "/ DOMICILI" o "/ DOMICILIO", ignorar-ho
+                # Filtrar falsos positius: si només captura "/ DOMICILI", "/ LLOC DE DOMICILI", etc., ignorar-ho
                 if same_line_match:
                     captured = same_line_match.group(1).strip()
                     # Si el que hem capturat és només el keyword traduït (amb o sense barra), no és una adreça real
-                    if re.match(r"^/\s*(D[O0]MICILI[O0]?|DOMICILI?)$", captured, re.IGNORECASE):
+                    # Ex: "/ DOMICILI", "/ LLOC DE DOMICILI", "/ LUGAR DE DOMICILIO"
+                    if re.match(r"^/\s*(D[O0]MICILI[O0]?|DOMICILI?|LLOC\s+DE\s+D[O0]MICILI[O0]?|LUGAR\s+DE\s+D[O0]MICILI[O0]?)$", captured, re.IGNORECASE):
                         same_line_match = None
 
                 if same_line_match:
@@ -267,14 +268,20 @@ class DNIParser:
                     # Llegir línies següents (comportament original)
                     for j in range(i + 1, min(i + 9, len(lines))):
                         nl = lines[j].strip()
+                        nlu = nl.upper()
                         # Aturar si línia buida
                         if not nl:
                             break
+                        # Saltar línies que són només keywords (ex: "LUGAR DE DOMICILIO / LLOC DE DOMICILI", "PROVINCIA/PAÍS")
+                        if (("LUGAR DE DOMICILIO" in nlu or "LLOC DE DOMICILI" in nlu or
+                             "PROVINCIA/PAÍS" in nlu or "PROVINCIA-PAÍS" in nlu or "PROVÍNCIA-PAÍS" in nlu)
+                            and not any(c.isdigit() for c in nl)):
+                            continue  # Saltar aquesta línia però continuar llegint
                         # Aturar si trobem keywords NO relacionades amb adreça
-                        if any(kw in nl.upper() for kw in
-                               ["FECHA", "DATA", "LUGAR", "LLOC", "PADRE", "PARE",
-                                "MADRE", "MARE", "EQUIPO", "EQUIP", "HIJO", "FILL",
-                                "IDNUM", "TEAM"]):
+                        if any(kw in nlu for kw in
+                               ["FECHA", "DATA", "LUGAR DE NACIMIENTO", "LLOC DE NAIXEMENT",
+                                "PADRE", "PARE", "MADRE", "MARE", "EQUIPO", "EQUIP",
+                                "HIJO", "FILL", "IDNUM", "TEAM"]):
                             break
                         adreca_lines.append(nl)
 
@@ -295,19 +302,42 @@ class DNIParser:
                         "TOLEDO", "CIUDAD REAL", "CUENCA", "GUADALAJARA", "ALBACETE",
                     ]
 
-                    # Primera línia: domicilio (carrer + número)
+                    # Primera línia: domicilio (carrer + número + piso/puerta)
                     data.domicilio = adreca_lines[0]
 
-                    # Separar carrer i número (ex: "C. ARTAIL 9" → calle="C. ARTAIL", numero="9")
+                    # Separar carrer, número i piso/puerta
+                    # Ex: "CRER. SALVADOR ESPRIU 45 P02 0001" → calle="CRER. SALVADOR ESPRIU", numero="45", piso_puerta="P02 0001"
+                    # Ex: "C. ARTAIL 9" → calle="C. ARTAIL", numero="9"
                     if data.domicilio:
-                        # Buscar número al final (amb/sense coma): "CRER. VENDRELL, 5" o "C. ARTAIL 9"
-                        numero_match = re.search(r"[,\s]+(\d+[A-Z]?)\s*$", data.domicilio)
-                        if numero_match:
-                            data.numero = numero_match.group(1).strip()
-                            data.calle = data.domicilio[:numero_match.start()].strip()
+                        # Primer intentar detectar: número + piso/puerta (P02, PO2, 1º, etc.)
+                        # Patró: número (1-4 dígits) seguit opcionalment de lletra, després piso/puerta
+                        full_match = re.search(
+                            r"[,\s]+(\d{1,4}[A-Z]?)\s+(P[O0]?\d+\s*\d*|[PB]\d+|[ESC]+[A-Z0-9\s]+|\d+[ºª°]?\s*[A-Z]?)(?:\s|$)",
+                            data.domicilio,
+                            re.IGNORECASE
+                        )
+
+                        if full_match:
+                            # Hem trobat número + piso/puerta
+                            data.numero = full_match.group(1).strip()
+                            # Extreure tot el piso/puerta fins al final o fins al següent camp
+                            rest = data.domicilio[full_match.end(1):].strip()
+                            # Netejar: agafar tot fins al final de la línia o fins trobem paraules clau
+                            piso_match = re.match(r"^([^\n,]+?)(?:\s*(?:ESCB?|ESC\s|,|$))", rest)
+                            if piso_match:
+                                data.piso_puerta = piso_match.group(1).strip()
+                            else:
+                                data.piso_puerta = rest.strip()
+                            data.calle = data.domicilio[:full_match.start()].strip()
                         else:
-                            # Si no hi ha número, tot és carrer
-                            data.calle = data.domicilio
+                            # No hem trobat piso/puerta, només número al final
+                            numero_match = re.search(r"[,\s]+(\d+[A-Z]?)\s*$", data.domicilio)
+                            if numero_match:
+                                data.numero = numero_match.group(1).strip()
+                                data.calle = data.domicilio[:numero_match.start()].strip()
+                            else:
+                                # Si no hi ha número, tot és carrer
+                                data.calle = data.domicilio
 
                     # Buscar codi postal (5 dígits) en TOTES les línies
                     for line in adreca_lines:
@@ -411,8 +441,8 @@ class DNIParser:
                 ft_data = DNIParser.parse_full_text(text)
 
                 # Copiar camps addicionals que MRZ no té
-                for attr in ("domicilio", "calle", "numero", "municipio", "provincia", "lugar_nacimiento",
-                             "nombre_padre", "nombre_madre"):
+                for attr in ("domicilio", "calle", "numero", "piso_puerta", "municipio", "provincia",
+                             "lugar_nacimiento", "nombre_padre", "nombre_madre"):
                     if getattr(ft_data, attr):
                         setattr(mrz_data, attr, getattr(ft_data, attr))
 
