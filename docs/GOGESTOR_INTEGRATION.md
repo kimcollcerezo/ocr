@@ -2,6 +2,7 @@
 
 > **Contracte v1** — Resposta unificada amb `valido`, `confianza_global`, `datos`, `errores_detectados`.
 > Totes les dates en format ISO 8601 (`YYYY-MM-DD`).
+> Última actualització: 2026-02-26
 
 ---
 
@@ -99,6 +100,54 @@ class OcrService
 
         } catch (\Exception $e) {
             Log::error('OCR DNI excepció: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Processar NIF/TIF (Targeta Identificació Fiscal).
+     *
+     * Retorna l'array complet del contracte v1 o null.
+     */
+    public function processarNIF(
+        UploadedFile|string $file,
+        bool $preprocess = false,
+        string $preprocessMode = 'standard'
+    ): ?array {
+        if (!$this->enabled) return null;
+
+        try {
+            $params = [];
+            if ($preprocess) {
+                $params['preprocess']      = 'true';
+                $params['preprocess_mode'] = $preprocessMode;
+            }
+
+            $response = Http::timeout($this->timeout)
+                ->attach('file', $this->fileContents($file), $this->fileName($file))
+                ->post("{$this->baseUrl}/ocr/nif", $params);
+
+            if (!$response->successful()) {
+                Log::error('OCR NIF HTTP error', [
+                    'status' => $response->status(),
+                    'detail' => $response->json('detail'),
+                ]);
+                return null;
+            }
+
+            $data = $response->json();
+
+            Log::info('OCR NIF processat', [
+                'valido'           => $data['valido'] ?? null,
+                'confianza_global' => $data['confianza_global'] ?? null,
+                'ocr_engine'       => $data['raw']['ocr_engine'] ?? null,
+                'errors'           => count($data['errores_detectados'] ?? []),
+            ]);
+
+            return $data;
+
+        } catch (\Exception $e) {
+            Log::error('OCR NIF excepció: ' . $e->getMessage());
             return null;
         }
     }
@@ -301,6 +350,65 @@ class DocumentController extends Controller
             'vehicle'          => $vehicle,
         ]);
     }
+
+    public function pujarNIF(Request $request)
+    {
+        $request->validate([
+            'nif' => 'required|image|mimes:jpeg,jpg,png,webp|max:5120',
+        ]);
+
+        $resultat = $this->ocr->processarNIF($request->file('nif'));
+
+        if ($resultat === null) {
+            return response()->json(['error' => 'Servei OCR no disponible'], 503);
+        }
+
+        if (!$resultat['valido']) {
+            return response()->json([
+                'error'   => 'NIF invàlid',
+                'detalls' => collect($resultat['errores_detectados'])->pluck('message'),
+            ], 422);
+        }
+
+        $datos = $resultat['datos'];
+
+        // Guardar empresa/entitat a la base de dades
+        $empresa = Empresa::updateOrCreate(
+            ['nif' => $datos['numero_nif']],
+            [
+                'tipo_nif'             => $datos['tipo_nif'],            // "CIF"
+                'razon_social'         => $datos['razon_social'],
+                'denominacion'         => $datos['denominacion'],
+                'anagrama_comercial'   => $datos['anagrama_comercial'],
+                // Domicili Social
+                'domicilio_social'     => $datos['domicilio_social'],
+                'social_calle'         => $datos['domicilio_social_calle'],
+                'social_numero'        => $datos['domicilio_social_numero'],
+                'social_piso_puerta'   => $datos['domicilio_social_piso_puerta'],
+                'social_cp'            => $datos['domicilio_social_codigo_postal'],
+                'social_municipio'     => $datos['domicilio_social_municipio'],
+                'social_provincia'     => $datos['domicilio_social_provincia'],
+                // Domicili Fiscal (OBLIGATORI)
+                'domicilio_fiscal'     => $datos['domicilio_fiscal'],
+                'fiscal_calle'         => $datos['domicilio_fiscal_calle'],
+                'fiscal_numero'        => $datos['domicilio_fiscal_numero'],
+                'fiscal_piso_puerta'   => $datos['domicilio_fiscal_piso_puerta'],
+                'fiscal_cp'            => $datos['domicilio_fiscal_codigo_postal'],
+                'fiscal_municipio'     => $datos['domicilio_fiscal_municipio'],
+                'fiscal_provincia'     => $datos['domicilio_fiscal_provincia'],
+                // Dates i AEAT
+                'fecha_nif_definitivo' => $datos['fecha_nif_definitivo'], // YYYY-MM-DD
+                'administracion_aeat'  => $datos['administracion_aeat'],
+                'codigo_electronico'   => $datos['codigo_electronico'],
+            ]
+        );
+
+        return response()->json([
+            'success'          => true,
+            'confianza_global' => $resultat['confianza_global'],
+            'empresa'          => $empresa,
+        ]);
+    }
 }
 ```
 
@@ -426,6 +534,57 @@ function avaluarOcr(array $resultat): string
 | `tipo_vehiculo` | `string\|null` | `"Turisme"` |
 | `fecha_ultima_transferencia` | `string\|null` ISO | `"2024-01-15"` |
 | `proxima_itv` | `string\|null` ISO | `"2028-08-08"` |
+
+### NIF (`datos`)
+
+| Camp | Tipus | Exemple |
+|------|-------|---------|
+| `numero_nif` | `string\|null` | `"B76261874"` |
+| `tipo_nif` | `string\|null` | `"CIF"` |
+| `razon_social` | `string\|null` | `"CASAACTIVA GESTION, S.L."` |
+| `denominacion` | `string\|null` | `"CASAACTIVA GESTION, S.L."` |
+| `anagrama_comercial` | `string\|null` | `"CASAACTIVA"` |
+| **Domicili Social** | | |
+| `domicilio_social` | `string\|null` | `"C MOSTEROL, NUM. 7..."` |
+| `domicilio_social_calle` | `string\|null` | `"C MOSTEROL"` |
+| `domicilio_social_numero` | `string\|null` | `"7"` |
+| `domicilio_social_piso_puerta` | `string\|null` | `"1º A"` |
+| `domicilio_social_municipio` | `string\|null` | `"TERRASSA"` |
+| `domicilio_social_provincia` | `string\|null` | `"BARCELONA"` |
+| `domicilio_social_codigo_postal` | `string\|null` | `"08221"` |
+| **Domicili Fiscal** | | |
+| `domicilio_fiscal` | `string\|null` | `"CALLE ORINOCO, NUM. 5..."` |
+| `domicilio_fiscal_calle` | `string\|null` | `"CALLE ORINOCO"` |
+| `domicilio_fiscal_numero` | `string\|null` | `"5"` |
+| `domicilio_fiscal_piso_puerta` | `string\|null` | `"PLANTA 0, PUERTA 3"` |
+| `domicilio_fiscal_municipio` | `string\|null` | `"PALMAS DE GRAN CANARIA"` |
+| `domicilio_fiscal_provincia` | `string\|null` | `"LAS"` |
+| `domicilio_fiscal_codigo_postal` | `string\|null` | `"35014"` |
+| **Dates i AEAT** | | |
+| `fecha_nif_definitivo` | `string\|null` ISO | `"2016-07-26"` |
+| `fecha_expedicion` | `string\|null` ISO | `"2020-01-15"` |
+| `administracion_aeat` | `string\|null` | `"35601 PALMAS G.C"` |
+| `codigo_administracion` | `string\|null` | `"35601"` |
+| `nombre_administracion` | `string\|null` | `"PALMAS G.C"` |
+| `codigo_electronico` | `string\|null` | `"2DCB113CA7F63DC2"` |
+
+**Notes NIF**:
+- **`domicilio_fiscal`** és **OBLIGATORI** per `valido: true`
+- **`domicilio_social`** és opcional (només algunes targetes)
+- Validació CIF amb **algoritme oficial AEAT** (dígit control calculat)
+- Tipus entitats per primera lletra: A=SA, B=SL, G=Associació, etc.
+
+### Codis d'error NIF
+
+| Codi | Gravetat | Significat |
+|------|----------|------------|
+| `NIF_MISSING_FIELD` | critical / error | Camp mínim absent (numero_nif, razon_social, domicilio_fiscal) |
+| `NIF_CHECKDIGIT_MISMATCH` | critical | Dígit de control CIF incorrecte (algoritme AEAT) |
+| `NIF_INVALID_FORMAT` | critical | Format NIF no reconegut |
+| `NIF_DATE_INVALID` | error | Data fora de rang (1980–avui) |
+| `NIF_OCR_NOISE` | warning | Caràcters estranys (soroll OCR) |
+
+**Nota**: La validació CIF és més complexa que DNI/NIE. Utilitza l'algoritme oficial AEAT amb suma ponderada dels 7 dígits centrals i validació segons la primera lletra (A/B/E/H només dígit, K/P/Q/S només lletra, altres ambdós).
 
 ---
 

@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
-from app.routes import dni, permis
+from app.routes import dni, permis, nif
 
 
 class _JsonFormatter(logging.Formatter):
@@ -122,6 +122,7 @@ async def validate_api_key(request: Request, call_next):
 # Routes
 app.include_router(dni.router, prefix="/ocr", tags=["DNI"])
 app.include_router(permis.router, prefix="/ocr", tags=["Permís"])
+app.include_router(nif.router, prefix="/ocr", tags=["NIF"])
 # app.include_router(compare.router, prefix="/ocr", tags=["Comparació"])  # TODO: Implementar més endavant
 
 

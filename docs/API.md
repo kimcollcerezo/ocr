@@ -1,7 +1,7 @@
 # Agent OCR — Documentació d'Implementació
 
 > **Contracte unificat v1** — Tots els endpoints retornen la mateixa estructura base.
-> Última actualització: 2026-02-18
+> Última actualització: 2026-02-26
 
 ---
 
@@ -13,13 +13,14 @@
 4. [Endpoint: Health Check](#4-endpoint-health-check)
 5. [Endpoint: DNI / NIE](#5-endpoint-dni--nie)
 6. [Endpoint: Permís de Circulació](#6-endpoint-permís-de-circulació)
-7. [Catàleg d'errors i alertes](#7-catàleg-derrors-i-alertes)
-8. [Lògica de confianza_global](#8-lògica-de-confianza_global)
-9. [Modes de preprocessament](#9-modes-de-preprocessament)
-10. [Codis d'estat HTTP](#10-codis-destat-http)
-11. [Exemples d'integració](#11-exemples-dintegració)
-12. [Bones pràctiques](#12-bones-pràctiques)
-13. [Límits del servei](#13-límits-del-servei)
+7. [Endpoint: NIF / TIF](#7-endpoint-nif--tif)
+8. [Catàleg d'errors i alertes](#8-catàleg-derrors-i-alertes)
+9. [Lògica de confianza_global](#9-lògica-de-confianza_global)
+10. [Modes de preprocessament](#10-modes-de-preprocessament)
+11. [Codis d'estat HTTP](#11-codis-destat-http)
+12. [Exemples d'integració](#12-exemples-dintegració)
+13. [Bones pràctiques](#13-bones-pràctiques)
+14. [Límits del servei](#14-límits-del-servei)
 
 ---
 
@@ -43,6 +44,7 @@ Producció:        https://ocr-production-abec.up.railway.app
 |--------|---------------|---------------------------------|
 | POST   | `/ocr/dni`    | Processar DNI o NIE             |
 | POST   | `/ocr/permis` | Processar Permís de Circulació  |
+| POST   | `/ocr/nif`    | Processar Targeta NIF/TIF       |
 | GET    | `/docs`       | Swagger UI interactiu           |
 | GET    | `/redoc`      | ReDoc interactiu                |
 
@@ -512,7 +514,183 @@ Content-Type: multipart/form-data
 
 ---
 
-## 7. Catàleg d'errors i alertes
+## 7. Endpoint: NIF / TIF
+
+### Request
+
+```http
+POST /ocr/nif
+Content-Type: multipart/form-data
+```
+
+| Paràmetre | Tipus | Obligatori | Default | Descripció |
+|-----------|-------|------------|---------|------------|
+| `file` | File | Sí | — | Imatge de la Targeta NIF (JPG, PNG, WEBP) |
+| `preprocess` | boolean | No | `false` | Activar preprocessament d'imatge |
+| `preprocess_mode` | string | No | `"standard"` | `standard` · `aggressive` · `document` |
+
+### Resposta: camps `datos`
+
+```json
+{
+  "datos": {
+    "numero_nif": "B76261874",
+    "tipo_nif": "CIF",
+    "denominacion": "CASAACTIVA GESTION, S.L.",
+    "razon_social": "CASAACTIVA GESTION, S.L.",
+    "anagrama_comercial": null,
+    "domicilio_social": null,
+    "domicilio_social_calle": null,
+    "domicilio_social_numero": null,
+    "domicilio_social_piso_puerta": null,
+    "domicilio_social_municipio": null,
+    "domicilio_social_provincia": null,
+    "domicilio_social_codigo_postal": null,
+    "domicilio_fiscal": "CALLE ORINOCO, NUM. 5 PLANTA 0, PUERTA 3 35014 PALMAS DE GRAN CANARIA (LAS) - (PALMAS, LAS)",
+    "domicilio_fiscal_calle": "CALLE ORINOCO",
+    "domicilio_fiscal_numero": "5",
+    "domicilio_fiscal_piso_puerta": "PLANTA 0, PUERTA 3",
+    "domicilio_fiscal_municipio": "PALMAS DE GRAN CANARIA",
+    "domicilio_fiscal_provincia": "LAS",
+    "domicilio_fiscal_codigo_postal": "35014",
+    "fecha_nif_definitivo": "2016-07-26",
+    "fecha_expedicion": null,
+    "administracion_aeat": "35601 PALMAS G.C",
+    "codigo_administracion": "35601",
+    "nombre_administracion": "PALMAS G.C",
+    "codigo_electronico": "2DCB113CA7F63DC2"
+  }
+}
+```
+
+### Descripció de camps `datos`
+
+| Camp | Tipus | Descripció |
+|------|-------|------------|
+| `numero_nif` | `string \| null` | NIF/CIF (1 lletra + 7 dígits + control) |
+| `tipo_nif` | `"CIF" \| null` | Tipus de NIF (sempre "CIF" per entitats) |
+| `denominacion` | `string \| null` | Denominació o raó social |
+| `razon_social` | `string \| null` | Raó social (alias de `denominacion`) |
+| `anagrama_comercial` | `string \| null` | Nom comercial de l'entitat |
+| **Domicili Social** | | |
+| `domicilio_social` | `string \| null` | Adreça completa del domicili social (registral) |
+| `domicilio_social_calle` | `string \| null` | Carrer del domicili social |
+| `domicilio_social_numero` | `string \| null` | Número del carrer |
+| `domicilio_social_piso_puerta` | `string \| null` | Pis i porta |
+| `domicilio_social_municipio` | `string \| null` | Municipi |
+| `domicilio_social_provincia` | `string \| null` | Província |
+| `domicilio_social_codigo_postal` | `string \| null` | Codi postal |
+| **Domicili Fiscal (AEAT)** | | |
+| `domicilio_fiscal` | `string \| null` | **Adreça completa del domicili fiscal (OBLIGATORI)** |
+| `domicilio_fiscal_calle` | `string \| null` | Carrer del domicili fiscal |
+| `domicilio_fiscal_numero` | `string \| null` | Número del carrer |
+| `domicilio_fiscal_piso_puerta` | `string \| null` | Pis i porta |
+| `domicilio_fiscal_municipio` | `string \| null` | Municipi |
+| `domicilio_fiscal_provincia` | `string \| null` | Província |
+| `domicilio_fiscal_codigo_postal` | `string \| null` | Codi postal |
+| **Dates i AEAT** | | |
+| `fecha_nif_definitivo` | `string \| null` | Data del NIF definitiu (ISO `YYYY-MM-DD`) |
+| `fecha_expedicion` | `string \| null` | Data d'expedició del document (ISO) |
+| `administracion_aeat` | `string \| null` | Administració AEAT completa (ex: "35601 PALMAS G.C") |
+| `codigo_administracion` | `string \| null` | Codi de l'administració (ex: "35601") |
+| `nombre_administracion` | `string \| null` | Nom de l'administració (ex: "PALMAS G.C") |
+| `codigo_electronico` | `string \| null` | Codi electrònic de verificació (hex) |
+
+> **Notes importants**:
+> - El **domicili fiscal** és obligatori per a la validesa del document (`valido: true`).
+> - El **domicili social** és opcional (només en alguns tipus de targetes).
+> - La **validació CIF** utilitza l'**algoritme oficial AEAT** amb dígit de control calculat.
+> - Totes les dates estan en format **ISO 8601** (`YYYY-MM-DD`).
+> - Els tipus de NIF per la primera lletra:
+>   - A = Societat Anònima
+>   - B = Societat Limitada
+>   - G = Associació o Fundació
+>   - (veure [NIF_PARSER.md](./NIF_PARSER.md) per la llista completa)
+
+### Exemple de resposta completa (NIF vàlid)
+
+```json
+{
+  "valido": true,
+  "confianza_global": 99,
+  "tipo_documento": "nif",
+  "datos": {
+    "numero_nif": "B76261874",
+    "tipo_nif": "CIF",
+    "denominacion": "CASAACTIVA GESTION, S.L.",
+    "razon_social": "CASAACTIVA GESTION, S.L.",
+    "anagrama_comercial": null,
+    "domicilio_social": null,
+    "domicilio_social_calle": null,
+    "domicilio_social_numero": null,
+    "domicilio_social_piso_puerta": null,
+    "domicilio_social_municipio": null,
+    "domicilio_social_provincia": null,
+    "domicilio_social_codigo_postal": null,
+    "domicilio_fiscal": "CALLE ORINOCO, NUM. 5 PLANTA 0, PUERTA 3 35014 PALMAS DE GRAN CANARIA (LAS) - (PALMAS, LAS)",
+    "domicilio_fiscal_calle": "CALLE ORINOCO",
+    "domicilio_fiscal_numero": "5",
+    "domicilio_fiscal_piso_puerta": "PLANTA 0, PUERTA 3",
+    "domicilio_fiscal_municipio": "PALMAS DE GRAN CANARIA",
+    "domicilio_fiscal_provincia": "LAS",
+    "domicilio_fiscal_codigo_postal": "35014",
+    "fecha_nif_definitivo": "2016-07-26",
+    "fecha_expedicion": null,
+    "administracion_aeat": "35601 PALMAS G.C",
+    "codigo_administracion": "35601",
+    "nombre_administracion": "PALMAS G.C",
+    "codigo_electronico": "2DCB113CA7F63DC2"
+  },
+  "alertas": [],
+  "errores_detectados": [],
+  "raw": {
+    "ocr_engine": "google_vision",
+    "ocr_confidence": 95.0
+  },
+  "meta": {
+    "success": true,
+    "message": "[google_vision] Validació correcta"
+  }
+}
+```
+
+### Exemple de resposta (NIF invàlid - checkdigit incorrecte)
+
+```json
+{
+  "valido": false,
+  "confianza_global": 50,
+  "tipo_documento": "nif",
+  "datos": {
+    "numero_nif": "B76261875",
+    "razon_social": "EXAMPLE COMPANY SL",
+    "domicilio_fiscal": "CALLE TEST 1"
+  },
+  "alertas": [],
+  "errores_detectados": [
+    {
+      "code": "NIF_CHECKDIGIT_MISMATCH",
+      "severity": "critical",
+      "field": "numero_nif",
+      "message": "Dígit de control CIF incorrecte.",
+      "evidence": "Llegit: '5', esperat: '4'",
+      "suggested_fix": null
+    }
+  ],
+  "raw": {
+    "ocr_engine": "google_vision",
+    "ocr_confidence": 90.0
+  },
+  "meta": {
+    "success": false,
+    "message": "[google_vision] Errors detectats"
+  }
+}
+```
+
+---
+
+## 8. Catàleg d'errors i alertes
 
 ### Errors DNI/NIE
 
@@ -542,6 +720,19 @@ Content-Type: multipart/form-data
 | `VEH_VIN_CHECKDIGIT` | `warning` | `numero_bastidor` | Dígit de control VIN (NHTSA) no coincideix |
 | `VEH_OCR_SUSPECT` | `warning` | Variable | Caràcters estranys en un camp (soroll OCR) |
 
+### Errors NIF/TIF
+
+| Codi | Severitat | Camp | Descripció |
+|------|-----------|------|------------|
+| `NIF_MISSING_FIELD` | `critical` | `numero_nif` | NIF/CIF no detectat |
+| `NIF_MISSING_FIELD` | `error` | `razon_social`, `domicilio_fiscal` | Camps mínims absents |
+| `NIF_CHECKDIGIT_MISMATCH` | `critical` | `numero_nif` | Dígit de control CIF incorrecte (algoritme AEAT) |
+| `NIF_INVALID_FORMAT` | `critical` | `numero_nif` | Format NIF no reconegut |
+| `NIF_DATE_INVALID` | `error` | `fecha_nif_definitivo`, `fecha_expedicion` | Data fora de rang (1980–avui) o en el futur |
+| `NIF_OCR_NOISE` | `warning` | diversos | Caràcters inesperats (soroll OCR) |
+
+> **Nota validació CIF**: El parser NIF utilitza l'**algoritme oficial AEAT** per validar el dígit de control del CIF, que és diferent de la validació DNI/NIE. Aquest algoritme calcula el dígit control segons la suma ponderada dels 7 dígits centrals i valida segons la primera lletra (A/B/E/H només dígit, K/P/Q/S només lletra, altres ambdós). Veure [NIF_PARSER.md](./NIF_PARSER.md) per més detalls.
+
 ### Criteris d'invalidació
 
 ```
@@ -557,7 +748,7 @@ valido = true   si:
 
 ---
 
-## 8. Lògica de confianza_global
+## 9. Lògica de confianza_global
 
 La puntuació final és una combinació de la lògica de validació i la confiança del motor OCR:
 
@@ -585,7 +776,7 @@ confianza_global = max(0, min(100, confianza_global))
 
 ---
 
-## 9. Modes de preprocessament
+## 10. Modes de preprocessament
 
 | Mode | Descripció | Cas d'ús | Velocitat |
 |------|------------|----------|-----------|
@@ -599,7 +790,7 @@ confianza_global = max(0, min(100, confianza_global))
 
 ---
 
-## 10. Codis d'estat HTTP
+## 11. Codis d'estat HTTP
 
 | HTTP | Situació |
 |------|----------|
@@ -621,7 +812,7 @@ confianza_global = max(0, min(100, confianza_global))
 
 ---
 
-## 11. Exemples d'integració
+## 12. Exemples d'integració
 
 ### cURL
 
@@ -881,7 +1072,7 @@ if ($result['valido']) {
 
 ---
 
-## 12. Bones pràctiques
+## 13. Bones pràctiques
 
 ### Qualitat d'imatge
 
@@ -957,7 +1148,7 @@ const result = await processarDNI(optimitzat);
 
 ---
 
-## 13. Límits del servei
+## 14. Límits del servei
 
 | Paràmetre | Valor |
 |-----------|-------|
@@ -974,6 +1165,7 @@ const result = await processarDNI(optimitzat);
 
 | Versió | Data | Canvis |
 |--------|------|--------|
+| v1.1 — NIF/TIF | 2026-02-26 | Nou endpoint POST /ocr/nif · Parser NIF amb validació CIF completa (algoritme AEAT) · 2 domicilis (social + fiscal) amb components separats · Dates ISO · Contracte unificat v1 |
 | v1.0 — Contracte unificat | 2026-02-18 | Resposta unificada (valido, confianza_global, ValidationItem) · Dates ISO · DNI+Permís paritat de funcions |
 | v0.3 | 2026-01 | Tesseract-first + Vision fallback · Semàfor concurrència · JSON logging |
 | v0.2 | 2026-01 | Parsers DNI millorats · MRZ parsing · VIN/matrícula validació |
